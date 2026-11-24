@@ -32,3 +32,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    ignore:
+      # The v2.6.0 image on ghcr.io is missing its platform manifests and cannot be pulled
+      - dependency-name: ossf/scorecard-action
+        versions: ["2.6.0"]
