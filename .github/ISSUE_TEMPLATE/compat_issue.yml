@@ -1,0 +1,87 @@
+name: 🧩 Compatibility issue
+description: A wx.* API, built-in component, WXML/WXSS feature or lifecycle behaves differently from WeChat or is not supported
+labels: [compat, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project aims to reproduce WeChat's Mini Program runtime behavior as closely as possible. Please describe how **WeChat** behaves and how **this project** behaves.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - wx.* API
+        - Built-in component
+        - WXML template syntax
+        - WXSS
+        - WXS
+        - Framework (App / Page / Component / Behavior / lifecycles)
+        - Custom components / plugins / subpackages
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: target
+    attributes:
+      label: API, component or feature
+      placeholder: wx.request, <scroll-view>, setData ...
+    validations:
+      required: true
+
+  - type: input
+    id: docs
+    attributes:
+      label: Official documentation
+      placeholder: https://developers.weixin.qq.com/miniprogram/dev/api/network/request/wx.request.html
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: Current status
+      options:
+        - Not supported
+        - Partially supported, behaves differently
+        - Supported, but buggy
+    validations:
+      required: true
+
+  - type: textarea
+    id: official
+    attributes:
+      label: WeChat behavior
+      description: How it behaves in WeChat DevTools or on a real device; screenshots or output help. Say which environment you tested (DevTools / iOS / Android).
+    validations:
+      required: true
+
+  - type: textarea
+    id: ours
+    attributes:
+      label: Behavior in this project
+    validations:
+      required: true
+
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Minimal reproduction
+      description: The smallest WXML / JS / WXSS that shows the difference.
+      render: javascript
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: This project's version and the Mini Program base library version
+      placeholder: open-miniprogram-runtime v0.1.0 / base library 3.6.0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'm willing to open a pull request to implement or fix this

@@ -1,0 +1,45 @@
+name: ✨ Feature request
+description: Suggest a new feature or improvement
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you want a missing WeChat API or component, use the "Compatibility issue" template instead.
+        For larger design changes, please start a [Discussion](https://github.com/nomofly/open-miniprogram-runtime/discussions) first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and why do the current capabilities fall short?
+      placeholder: When I ..., I always have to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work? An API sketch or a description of the interaction helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, or how you work around it today.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, prior art, related issues and so on.
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'm willing to open a pull request to implement this

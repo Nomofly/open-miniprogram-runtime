@@ -1,0 +1,99 @@
+name: 🐛 Bug report
+description: The simulator crashes, reports an error, or doesn't behave as expected
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Before you submit:
+        - Search [existing issues](https://github.com/nomofly/open-miniprogram-runtime/issues?q=is%3Aissue) to avoid duplicates.
+        - If an API or component **behaves differently from WeChat**, use the "Compatibility issue" template instead.
+        - **Do not report security vulnerabilities here**; report them privately as described in [SECURITY.md](https://github.com/nomofly/open-miniprogram-runtime/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The fewest steps that reproduce the problem reliably.
+      placeholder: |
+        1. Run `omr screenshot ./my-app --page pages/index/index`
+        2. ...
+        3. See the error ...
+    validations:
+      required: true
+
+  - type: input
+    id: repro-link
+    attributes:
+      label: Minimal reproduction
+      description: A link to a minimal Mini Program project that shows the problem. Issues without one may be labeled needs-repro.
+      placeholder: https://github.com/you/omr-repro
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, screenshots or recordings.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: open-miniprogram-runtime version
+      description: Version number or commit SHA
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: base-library
+    attributes:
+      label: Mini Program base library version
+      description: libVersion in project.config.json, or the base library version set in the simulator
+      placeholder: 3.6.0
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node.js version, how you ran it (CLI / MCP / browser), and whether it ran in an agent sandbox
+      placeholder: |
+        - OS: Ubuntu 24.04 (agent sandbox)
+        - Node.js: 26.13.1
+        - Invocation: omr screenshot (CLI)
+        - Agent: Amp / Claude Code / Codex ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste console output; it is formatted as code automatically.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I agree to follow the [Code of Conduct](https://github.com/nomofly/open-miniprogram-runtime/blob/main/CODE_OF_CONDUCT.md)
+          required: true

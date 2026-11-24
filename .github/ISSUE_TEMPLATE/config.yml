@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions and discussions
+    url: https://github.com/nomofly/open-miniprogram-runtime/discussions
+    about: Ask usage questions and share ideas in Discussions. Issues are for trackable bugs and features.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/nomofly/open-miniprogram-runtime/security/advisories/new
+    about: Report it privately through GitHub private vulnerability reporting, not in a public issue.

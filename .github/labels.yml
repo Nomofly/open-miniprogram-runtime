@@ -1,0 +1,90 @@
+# The single source of truth for repository labels. After a change lands on main,
+# the Labels workflow syncs it to GitHub. Syncing only creates and updates labels;
+# it never deletes labels that are not listed here.
+
+# Type
+- name: bug
+  color: "d73a4a"
+  description: Behavior differs from what is expected or from WeChat
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement
+- name: compat
+  color: "f9d0c4"
+  description: Compatibility with WeChat Mini Program APIs, components or framework behavior
+- name: documentation
+  color: "0075ca"
+  description: Documentation
+- name: question
+  color: "d876e3"
+  description: Usage question; please use Discussions
+- name: security
+  color: "b60205"
+  description: Security related (report vulnerabilities privately, see SECURITY.md)
+
+# Status
+- name: needs-triage
+  color: "fbca04"
+  description: Waiting for a maintainer to triage
+- name: needs-repro
+  color: "fef2c0"
+  description: Needs a minimal reproduction
+- name: needs-info
+  color: "fef2c0"
+  description: Waiting for more information from the author
+- name: confirmed
+  color: "0e8a16"
+  description: Confirmed and ready to work on
+- name: blocked
+  color: "000000"
+  description: Blocked by another issue or an external factor
+
+# Area
+- name: "area: runtime"
+  color: "c5def5"
+  description: Logic layer, JS runtime, App / Page / Component lifecycles
+- name: "area: renderer"
+  color: "c5def5"
+  description: View layer, WXML, WXSS, built-in components
+- name: "area: api"
+  color: "c5def5"
+  description: wx.* API implementations
+- name: "area: compiler"
+  color: "c5def5"
+  description: Loading and compiling Mini Program code
+- name: "area: simulator"
+  color: "c5def5"
+  description: Simulator UI, devices, page stack and routing
+- name: "area: agent"
+  color: "c5def5"
+  description: "Agent-facing CLI / MCP: screenshots, annotation, debugging, interaction"
+- name: "area: infra"
+  color: "c5def5"
+  description: Build, CI/CD and repository governance
+
+# Community
+- name: good first issue
+  color: "7057ff"
+  description: Good for first-time contributors
+- name: help wanted
+  color: "008672"
+  description: Open for the community to pick up
+- name: breaking change
+  color: "e11d21"
+  description: Contains a breaking change
+
+# Resolution
+- name: duplicate
+  color: "cfd3d7"
+  description: Duplicate issue or pull request
+- name: invalid
+  color: "e4e669"
+  description: Invalid or unrelated to the project
+- name: wontfix
+  color: "ffffff"
+  description: Will not be worked on
+
+# Automation
+- name: dependencies
+  color: "0366d6"
+  description: Dependency updates (Dependabot)

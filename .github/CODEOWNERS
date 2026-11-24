@@ -1,0 +1,3 @@
+# Maintainers review every file by default. Split ownership by directory as modules grow, for example:
+# /packages/renderer/ @nomofly/renderer-maintainers
+* @IveTian
