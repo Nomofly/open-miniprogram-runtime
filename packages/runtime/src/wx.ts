@@ -36,6 +36,8 @@ export interface WxHost {
   scopeOf(instance: object): { webviewId: number; nodeId: number } | undefined;
   query(webviewId: number, requests: SelectorQueryRequest[]): Promise<unknown[]>;
   sendView(webviewId: number, message: LogicToView): void;
+  /** How far the current page's window starts below the screen top and ends above its bottom. */
+  windowInsets(): { top: number; bottom: number };
   /** Shows in the capsule which capabilities are in use. */
   setPermissionsInUse(kinds: PermissionKind[]): void;
 }
@@ -197,18 +199,22 @@ export function createWx(host: WxHost) {
    */
   const requirePrivacy = async (referrer: string) => {
     if (privacyAgreed) return;
-    if (privacyListener) {
-      const listener = privacyListener;
-      const answer = await new Promise<Record<string, unknown>>((resolve) => {
-        const resolvePrivacy = (result?: Record<string, unknown>) => {
-          if (result?.event !== "exposureAuthorization") resolve(result ?? {});
-        };
-        try {
-          listener(resolvePrivacy, { referrer });
-        } catch (error) {
-          console.error("[omr] error in onNeedPrivacyAuthorization listener:", error);
-        }
-      });
+    // Undefined when the listener throws: WeChat shows its own popup when the developer does not respond
+    const listener = privacyListener;
+    const answer = listener
+      ? await new Promise<Record<string, unknown> | undefined>((resolve) => {
+          const resolvePrivacy = (result?: Record<string, unknown>) => {
+            if (result?.event !== "exposureAuthorization") resolve(result ?? {});
+          };
+          try {
+            listener(resolvePrivacy, { referrer });
+          } catch (error) {
+            console.error("[omr] error in onNeedPrivacyAuthorization listener:", error);
+            resolve(undefined);
+          }
+        })
+      : undefined;
+    if (answer) {
       if (answer.event === "agree") {
         const { buttonId } = answer;
         if (typeof buttonId === "string" && agreeButtons.has(buttonId)) {
@@ -544,8 +550,14 @@ export function createWx(host: WxHost) {
     return webviewId;
   };
 
+  /** System info with the window of the current page: a tab bar or a custom navigation bar changes its height. */
+  const systemInfo = (): SystemInfo => {
+    const { top, bottom } = host.windowInsets();
+    const screenHeight = Number(host.system.screenHeight);
+    return { ...host.system, windowHeight: screenHeight - top - bottom, screenTop: top };
+  };
   const windowInfo = () => {
-    const s = host.system;
+    const s = systemInfo();
     return {
       pixelRatio: s.pixelRatio,
       screenWidth: s.screenWidth,
@@ -554,7 +566,7 @@ export function createWx(host: WxHost) {
       windowHeight: s.windowHeight,
       statusBarHeight: s.statusBarHeight,
       safeArea: s.safeArea,
-      screenTop: s.screenTop ?? 0,
+      screenTop: s.screenTop,
     };
   };
 
@@ -754,8 +766,8 @@ export function createWx(host: WxHost) {
     getStorageInfo: asyncApi("getStorageInfo", async () => wx.getStorageInfoSync()),
 
     // System
-    getSystemInfoSync: () => ({ ...host.system }),
-    getSystemInfo: asyncApi("getSystemInfo", async () => ({ ...host.system })),
+    getSystemInfoSync: systemInfo,
+    getSystemInfo: asyncApi("getSystemInfo", async () => systemInfo()),
     getWindowInfo: windowInfo,
     getDeviceInfo: () => ({
       brand: host.system.brand,

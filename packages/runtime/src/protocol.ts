@@ -157,6 +157,8 @@ export type ShellToLogic =
       manifest: Manifest;
       system: SystemInfo;
       menuButton: MenuButtonRect;
+      /** Heights of the status and navigation bars together, and of the tab bar with the safe area below it. */
+      chrome: { navigationBar: number; tabBar: number };
       /** The logic-layer bundle from the compiler's `compileAppService`. */
       appService: string;
       /** Storage kept from an earlier session; config storage is used when absent. */

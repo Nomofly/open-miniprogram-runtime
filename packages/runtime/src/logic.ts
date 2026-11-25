@@ -746,6 +746,15 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
         if (record) sendView(record, viewMessage);
       },
       setPermissionsInUse: (kinds) => post({ type: "permissionsInUse", kinds }),
+      windowInsets: () => {
+        // Before the first page opens, the window is the launch page's
+        const route = stack[stack.length - 1]?.route ?? launch.path;
+        const custom = message.manifest.windows[route]?.navigationStyle === "custom";
+        return {
+          top: custom ? 0 : message.chrome.navigationBar,
+          bottom: isTabPage(route) ? message.chrome.tabBar : 0,
+        };
+      },
     });
 
     Object.assign(globalThis, {

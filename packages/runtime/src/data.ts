@@ -31,20 +31,34 @@ export function parsePath(key: string): (string | number)[] {
   return parts;
 }
 
+type DataNode = Record<string | number, unknown>;
+
+// Path parts are data keys: only own properties are read, and every write defines
+// an own property, so a key such as __proto__ never reaches an object's prototype
+const own = (node: DataNode, part: string | number) =>
+  Object.hasOwn(node, part) ? node[part] : undefined;
+const define = (node: DataNode, part: string | number, value: unknown) =>
+  Object.defineProperty(node, part, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
 /** Sets `value` at a `setData` path, creating missing objects and arrays on the way. */
 export function setPath(target: Record<string, unknown>, key: string, value: unknown): void {
   const parts = parsePath(key);
-  let node: Record<string | number, unknown> = target;
+  let node: DataNode = target;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]!;
-    let next = node[part];
+    let next = own(node, part);
     if (next === null || typeof next !== "object") {
       next = typeof parts[i + 1] === "number" ? [] : {};
-      node[part] = next;
+      define(node, part, next);
     }
-    node = next as Record<string | number, unknown>;
+    node = next as DataNode;
   }
-  node[parts[parts.length - 1]!] = value;
+  define(node, parts[parts.length - 1]!, value);
 }
 
 /** Reads the value at a `setData` path, or undefined when part of it is missing. */
@@ -52,7 +66,7 @@ export function getPath(target: unknown, key: string): unknown {
   let node = target;
   for (const part of parsePath(key)) {
     if (node === null || typeof node !== "object") return undefined;
-    node = (node as Record<string | number, unknown>)[part];
+    node = own(node as DataNode, part);
   }
   return node;
 }

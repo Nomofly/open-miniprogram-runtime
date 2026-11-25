@@ -17,6 +17,7 @@ function boot(
   files: Record<string, string>,
   appJson: Record<string, unknown> & { pages: string[] },
   config: SimulatorConfig = {},
+  windows: Record<string, Record<string, unknown>> = {},
 ) {
   const sent: LogicToShell[] = [];
   const handle = startLogic((message) => sent.push(message));
@@ -34,11 +35,12 @@ function boot(
       appJson,
       pages: appJson.pages,
       entryPage: appJson.pages[0]!,
-      windows: {},
+      windows,
       config,
     },
     system: SYSTEM,
     menuButton: MENU_BUTTON,
+    chrome: { navigationBar: 64, tabBar: 50 },
     appService,
   });
   const view = (webviewId: number, message: ViewToLogic) =>
@@ -388,6 +390,65 @@ describe("logic layer", () => {
     await settle();
     expect(log()).toEqual(["stop true"]);
     expect(inUse()).toEqual([["location"], ["record", "location"], ["location"], []]);
+  });
+
+  test("setData keys named __proto__ stay in the data and never reach Object.prototype", () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onLoad() { this.setData({ "__proto__.polluted": 1, "a.__proto__": 2 }); } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(JSON.stringify(toView(sent, "init")[0])).toContain(
+      '"__proto__":{"polluted":1},"a":{"__proto__":2}',
+    );
+  });
+
+  test("a privacy listener that throws falls back to the official popup", async () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onLoad() {
+          wx.onNeedPrivacyAuthorization(() => { throw new Error("broken"); });
+          wx.requirePrivacyAuthorize({});
+        } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(sent.filter((message) => message.type === "ui")).toMatchObject([{ name: "privacy" }]);
+  });
+
+  test("windowHeight is the current page's window: without the tab bar, or the full screen with a custom navigation bar", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/tab/tab.js": `Page({ onLoad() {
+          getApp().log.push(wx.getSystemInfoSync().windowHeight);
+          wx.navigateTo({ url: "/pages/custom/custom" });
+        } });`,
+        "pages/custom/custom.js": `Page({ onLoad() {
+          const { windowHeight, screenTop } = wx.getWindowInfo();
+          getApp().log.push(windowHeight, screenTop);
+        } });`,
+      },
+      {
+        pages: ["pages/tab/tab", "pages/custom/custom"],
+        tabBar: { list: [{ pagePath: "pages/tab/tab" }] },
+      },
+      {},
+      { "pages/custom/custom": { navigationStyle: "custom" } },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    view(2, { type: "ready" });
+    await settle();
+    // screenHeight 667, navigation bar 64, tab bar 50
+    expect(log()).toEqual([553, 667, 0]);
   });
 
   test("navigateTo hides the opener, navigateBack unloads the top page, and tab pages refuse navigateTo", async () => {

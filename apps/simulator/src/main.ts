@@ -126,7 +126,11 @@ const pages = new Map<number, PageView>();
 let stack: StackEntry[] = [];
 
 const worker = new Worker(new URL("./logic-worker.ts", import.meta.url), { type: "module" });
-const toLogic = (message: ShellToLogic) => worker.postMessage(message);
+// The logic layer talks to the shell only over this private port, handed over before any
+// Mini Program code runs; that code can post on the Worker itself, which the shell ignores
+const logic = new MessageChannel();
+worker.postMessage(null, [logic.port2]);
+const toLogic = (message: ShellToLogic) => logic.port1.postMessage(message);
 
 function applyWindow(page: PageView): void {
   const win = page.window;
@@ -280,7 +284,7 @@ async function onUi(message: Extract<LogicToShell, { type: "ui" }>): Promise<voi
 const storageKey = `omr-storage:${manifest.appid}`;
 let lastRoute: Extract<LogicToShell, { type: "route" }> | undefined;
 
-worker.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
+logic.port1.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
   const message = event.data;
   switch (message.type) {
     case "route":
@@ -304,6 +308,7 @@ worker.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
       break;
   }
 });
+logic.port1.start();
 worker.addEventListener("error", (event) => console.error("[omr] logic layer:", event.message));
 
 addEventListener(
@@ -325,6 +330,7 @@ toLogic({
   manifest,
   system,
   menuButton,
+  chrome: { navigationBar: navHeight, tabBar: TAB_BAR_HEIGHT + device.safeAreaBottom },
   appService,
   storage: saved ? (JSON.parse(saved) as Record<string, unknown>) : undefined,
   launch: launchPath
