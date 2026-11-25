@@ -32,12 +32,15 @@ export function parsePageUrl(
   fromRoute: string,
 ): { route: string; query: Record<string, string> } {
   const [pathPart = "", search = ""] = url.split("?", 2);
-  const query: Record<string, string> = {};
-  for (const pair of search.split("&")) {
-    if (!pair) continue;
-    const index = pair.indexOf("=");
-    if (index === -1) query[pair] = "";
-    else query[pair.slice(0, index)] = pair.slice(index + 1);
-  }
+  // fromEntries defines own keys, so a key such as __proto__ is an ordinary key
+  const query: Record<string, string> = Object.fromEntries(
+    search
+      .split("&")
+      .filter(Boolean)
+      .map((pair) => {
+        const index = pair.indexOf("=");
+        return index === -1 ? [pair, ""] : [pair.slice(0, index), pair.slice(index + 1)];
+      }),
+  );
   return { route: resolvePath(fromRoute, pathPart), query };
 }

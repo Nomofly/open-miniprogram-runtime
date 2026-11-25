@@ -256,7 +256,7 @@ function renderElement(
  * or 0.5px on iOS devices with a pixel ratio above 1).
  */
 export function convertRpx(css: string, windowWidth: number, hairline = 1): string {
-  return css.replace(/(-?(?:\d+\.?\d*|\.\d+))rpx\b/g, (_, number: string) => {
+  return css.replace(/(?<![\d.])(-?(?:\d+(?:\.\d*)?|\.\d+))rpx\b/g, (_, number: string) => {
     const value = Number(number);
     const px = Math.floor((Math.abs(value) * windowWidth) / 750 + 0.0001);
     const result = px === 0 && value !== 0 ? hairline : px;

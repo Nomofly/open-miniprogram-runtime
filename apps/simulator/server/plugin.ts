@@ -3,7 +3,7 @@
  * bundle, each page's view bundle, its files, a proxy for `wx.request`, and a
  * mock of the WeChat server APIs a backend calls to finish login.
  */
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -270,10 +270,18 @@ async function serveFile(res: ServerResponse, root: string, relative: string): P
     return;
   }
   try {
-    if (!(await stat(file)).isFile()) throw new Error("not a file");
+    // Check and read the same open file, so it cannot be swapped in between
+    const handle = await open(file, "r");
+    let body: Buffer;
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error("not a file");
+      body = await handle.readFile();
+    } finally {
+      await handle.close();
+    }
     const type = CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
     res.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
-    res.end(await readFile(file));
+    res.end(body);
   } catch {
     sendJson(res, 404, { error: `${relative} not found` });
   }

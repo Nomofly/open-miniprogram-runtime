@@ -155,7 +155,7 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
       try {
         requireModule(`${path}.js`);
       } catch (error) {
-        console.error(`[omr] failed to load ${path}.js:`, error);
+        console.error("[omr] failed to load %s.js:", path, error);
       }
     }
     const def = defs.get(path);
@@ -202,7 +202,7 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
     }
   };
   const reportError = (error: unknown, where: string) => {
-    console.error(`[omr] error in ${where}:`, error);
+    console.error("[omr] error in %s:", where, error);
     if (app && typeof app.onError === "function") {
       try {
         app.onError.call(
@@ -380,8 +380,8 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
     const patch: Record<string, unknown> = {};
     for (const [attr, raw] of Object.entries(props)) {
       const name = attr.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
-      const prop = comp.def.properties[name];
-      if (!prop) continue;
+      if (!Object.hasOwn(comp.def.properties, name)) continue;
+      const prop = comp.def.properties[name]!;
       const value = coerce(prop.type, raw);
       if (JSON.stringify(value) === JSON.stringify(comp.instance.data[name])) continue;
       patch[name] = value;
@@ -691,7 +691,11 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
 
   const boot = (message: Extract<ShellToLogic, { type: "boot" }>) => {
     manifest = message.manifest;
-    const storage = message.storage ?? toJsonValue(manifest.config.storage ?? {});
+    // Without a prototype, any storage key, such as __proto__, is an ordinary key
+    const storage = Object.assign(
+      Object.create(null) as Record<string, unknown>,
+      message.storage ?? toJsonValue(manifest.config.storage ?? {}),
+    );
     const launch = message.launch ?? { path: manifest.entryPage, query: {} };
     if (!manifest.pages.includes(launch.path)) {
       console.error(
