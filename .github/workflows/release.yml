@@ -2,13 +2,18 @@ name: Release
 
 # release-please maintains a release PR from the Conventional Commits on main.
 # Merging it tags the release, updates CHANGELOG.md and creates a GitHub Release.
+#
+# It runs with the RELEASE_PLEASE_TOKEN secret instead of GITHUB_TOKEN because the
+# organization does not let GitHub Actions create pull requests, and because pull
+# requests opened with GITHUB_TOKEN do not trigger CI, so the release PR could never
+# pass its required checks. The secret is a fine-grained personal access token for
+# this repository only, with Contents, Pull requests and Issues set to read and write.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}
@@ -17,12 +22,9 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
