@@ -253,6 +253,7 @@ function createPage(entry: StackEntry): PageView {
         hairline: device.platform === "ios" && device.pixelRatio > 1 ? 0.5 : 1,
         styleV2,
         dark: darkmode && theme === "dark",
+        ad: manifest.config.ad,
       };
       // The view paints the window background behind pull-down refresh in this theme
       bundle.window = themeWindow(bundle.window, manifest.themeVariables, theme);
@@ -450,6 +451,12 @@ logic.port1.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
       break;
     case "permissionsInUse":
       showPermissionsInUse(message.kinds);
+      break;
+    case "videoFullScreen":
+      // style.css grows the page's WebView to the whole screen and hides the chrome while it is shown
+      pages
+        .get(message.webviewId)
+        ?.el.classList.toggle("omr-page-video-fullscreen", message.fullScreen);
       break;
     case "storage":
       // Kept for reloads in this tab; a new session starts from omr.config.json

@@ -119,8 +119,8 @@ async function proxy(request: ProxyRequest, signal: AbortSignal): Promise<ProxyR
   return result;
 }
 
-/** Sends a request through the proxy and reads its body as it arrives. */
-async function proxyStream(
+/** Sends a request through the proxy and reads its body as it arrives; canvas images load with it too. */
+export async function proxyStream(
   request: ProxyRequest,
   signal: AbortSignal,
   onHead: (head: ProxyHead) => void,

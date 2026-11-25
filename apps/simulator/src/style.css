@@ -53,6 +53,18 @@ html[data-frame="0"] #omr-device {
 .omr-page-active {
   visibility: visible;
 }
+/* A full-screen video covers the whole screen: its page's WebView over the hidden chrome */
+.omr-page-video-fullscreen .omr-navbar {
+  display: none;
+}
+.omr-page-video-fullscreen .omr-webview {
+  top: 0 !important;
+  height: 100% !important;
+}
+#omr-device:has(.omr-page-active.omr-page-video-fullscreen)
+  :is(.omr-statusbar, .omr-capsule, .omr-tabbar) {
+  visibility: hidden;
+}
 .omr-webview {
   position: absolute;
   left: 0;
@@ -930,6 +942,149 @@ html[data-frame="0"] #omr-device {
   font-weight: 600;
 }
 
+/* Settings, customer service and feedback pages */
+.omr-settings,
+.omr-contact,
+.omr-feedback {
+  display: flex;
+  flex-direction: column;
+  background: #ededed;
+  color: rgba(0, 0, 0, 0.9);
+}
+.omr-settings .omr-page-bar,
+.omr-contact .omr-page-bar,
+.omr-feedback .omr-page-bar {
+  flex: none;
+  background: #ededed;
+}
+.omr-page-bar-back {
+  justify-self: start;
+  margin-left: -6px;
+}
+.omr-page-bar .omr-page-bar-back {
+  font-size: 34px;
+  line-height: 44px;
+}
+.omr-settings-section {
+  padding: 24px 16px 8px;
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 14px;
+}
+.omr-settings-group {
+  background: #fff;
+}
+.omr-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  margin-left: 16px;
+  padding-right: 16px;
+  font-size: 17px;
+}
+.omr-settings-row + .omr-settings-row {
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-settings-empty {
+  padding: 40px 16px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 15px;
+  text-align: center;
+}
+.omr-contact-name {
+  padding: 4px 0 8px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  text-align: center;
+}
+.omr-contact-messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.omr-contact-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.omr-contact-bubble {
+  max-width: 70%;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.omr-contact-hint {
+  margin-top: 8px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  text-align: right;
+}
+.omr-contact .omr-contact-card {
+  display: flex;
+  flex-direction: column;
+  align-self: flex-end;
+  width: 220px;
+  padding: 10px 12px 6px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: #fff;
+  text-align: left;
+}
+.omr-contact-card-app {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+}
+.omr-contact-card-title {
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 15px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.omr-contact-card-img {
+  display: block;
+  width: 100%;
+  height: 156px;
+  margin-top: 8px;
+  object-fit: cover;
+  background: #f2f2f2;
+}
+.omr-contact-card-footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+}
+.omr-feedback-input {
+  height: 160px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border: 0;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  resize: none;
+  outline: none;
+}
+.omr-feedback .omr-feedback-submit {
+  width: 184px;
+  margin: 32px auto 0;
+  padding: 12px 0;
+  border-radius: 8px;
+  background: #07c160;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
 /* Image viewer */
 .omr-preview {
   background: #000;
@@ -1105,4 +1260,37 @@ html[data-frame="0"] .omr-toolbar {
 #omr-device.omr-theme-dark .omr-action-sheet > .omr-button,
 #omr-device.omr-theme-dark .omr-action-alert {
   background: #2c2c2c;
+}
+#omr-device.omr-theme-dark .omr-settings,
+#omr-device.omr-theme-dark .omr-contact,
+#omr-device.omr-theme-dark .omr-feedback,
+#omr-device.omr-theme-dark .omr-settings .omr-page-bar,
+#omr-device.omr-theme-dark .omr-contact .omr-page-bar,
+#omr-device.omr-theme-dark .omr-feedback .omr-page-bar {
+  background: #111;
+  color: rgba(255, 255, 255, 0.8);
+}
+#omr-device.omr-theme-dark .omr-settings-section,
+#omr-device.omr-theme-dark .omr-settings-empty,
+#omr-device.omr-theme-dark .omr-contact-name,
+#omr-device.omr-theme-dark .omr-contact-hint,
+#omr-device.omr-theme-dark .omr-contact-card-app,
+#omr-device.omr-theme-dark .omr-contact-card-footer {
+  color: rgba(255, 255, 255, 0.5);
+}
+#omr-device.omr-theme-dark .omr-settings-group,
+#omr-device.omr-theme-dark .omr-contact-bubble,
+#omr-device.omr-theme-dark .omr-contact .omr-contact-card,
+#omr-device.omr-theme-dark .omr-feedback-input {
+  background: #2c2c2c;
+}
+#omr-device.omr-theme-dark .omr-settings-row + .omr-settings-row,
+#omr-device.omr-theme-dark .omr-contact-card-footer {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+#omr-device.omr-theme-dark .omr-contact-card-img {
+  background: #3a3a3a;
+}
+#omr-device.omr-theme-dark .omr-switch:not(.omr-switch-on) {
+  background: #3a3a3a;
 }

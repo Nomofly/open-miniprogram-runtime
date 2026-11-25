@@ -121,74 +121,446 @@ export class WxImage extends Builtin {
 const DANMU_ROW = 24;
 /** How long a danmu takes to cross the video, in milliseconds. */
 const DANMU_MS = 6000;
+/** How long the controls stay while playing after the last touch, in milliseconds. */
+const CONTROLS_MS = 3000;
+
+/** The names of the MediaError codes, which `binderror` gives as its reason. */
+const MEDIA_ERRORS: Record<number, string> = {
+  1: "MEDIA_ERR_ABORTED",
+  2: "MEDIA_ERR_NETWORK",
+  3: "MEDIA_ERR_DECODE",
+  4: "MEDIA_ERR_SRC_NOT_SUPPORTED",
+};
+
+/** A boolean attribute as WeChat reads it: absent is the default, any other value is truthy or not. */
+const option = (props: Record<string, unknown>, name: string, fallback: boolean) =>
+  props[name] === undefined ? fallback : Boolean(props[name]);
+
+/** Which of `<video>`'s own controls show. */
+export interface VideoControls {
+  /** The control bar at the bottom, with the times. */
+  bar: boolean;
+  /** The play/pause button in the bar. */
+  play: boolean;
+  /** The play/pause button in the middle while the bar shows, for `play-btn-position="center"`. */
+  centerToggle: boolean;
+  /** The large play button in the middle while paused. */
+  centerPlay: boolean;
+  progress: boolean;
+  mute: boolean;
+  fullScreen: boolean;
+  danmu: boolean;
+  poster: boolean;
+}
+
+/** The controls a `<video>` shows for its attributes, while paused or not, at a width in px. */
+export function videoControls(
+  props: Record<string, unknown>,
+  state: { paused: boolean; width: number },
+): VideoControls {
+  const controls = option(props, "controls", true);
+  const playButton = controls && option(props, "show-play-btn", true);
+  const center = props["play-btn-position"] === "center";
+  const centerPlay = state.paused && option(props, "show-center-play-btn", true);
+  return {
+    bar: controls,
+    play: playButton && !center,
+    centerToggle: playButton && center && !centerPlay,
+    centerPlay,
+    // Unset, the progress bar shows only on a video wider than 240px
+    progress: controls && option(props, "show-progress", state.width > 240),
+    mute: controls && option(props, "show-mute-btn", false),
+    fullScreen: controls && option(props, "show-fullscreen-btn", true),
+    danmu: controls && option(props, "danmu-btn", false),
+    // WeChat ignores the poster of a video without controls
+    poster: controls && Boolean(props.poster),
+  };
+}
+
+export interface Danmu {
+  text: string;
+  color: string;
+  time: number;
+}
 
 /**
- * `<video>`. `VideoContext` drives it through `omrCall`: full screen covers the
- * page's window (turned sideways for a horizontal video), and danmu cross the
- * video when `enable-danmu` is set.
+ * The `danmu-list` items whose `time` playback passed going from `previous`
+ * to `current` seconds: from `previous` included to `current` excluded, and
+ * none when time went back or stood still.
+ */
+export function dueDanmu(list: unknown, previous: number, current: number): Danmu[] {
+  if (!Array.isArray(list) || !(current > previous)) return [];
+  return list.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object") return [];
+    const { text, color, time } = item as Record<string, unknown>;
+    const at = Number(time);
+    if (typeof text !== "string" && typeof text !== "number") return [];
+    if (text === "" || !Number.isFinite(at) || at < previous || at >= current) return [];
+    return [
+      {
+        text: String(text),
+        color: typeof color === "string" && color ? color : "#ffffff",
+        time: at,
+      },
+    ];
+  });
+}
+
+/**
+ * `bindprogress`'s `buffered`: how far the loaded part reaches, as a whole
+ * percentage of the duration. WeChat reports one loaded part: the one holding
+ * the current time, else the first.
+ */
+export function bufferedPercent(
+  ranges: { length: number; start(index: number): number; end(index: number): number },
+  currentTime: number,
+  duration: number,
+): number {
+  if (!(duration > 0) || !Number.isFinite(duration) || ranges.length === 0) return 0;
+  let index = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    if (ranges.start(i) <= currentTime && currentTime <= ranges.end(i)) {
+      index = i;
+      break;
+    }
+  }
+  return Math.max(0, Math.min(100, Math.round((ranges.end(index) / duration) * 100)));
+}
+
+const svg = (body: string, size = 22) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const VIDEO_ICONS = {
+  play: svg('<path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/>'),
+  pause: svg('<path d="M8 5v14M16 5v14" stroke-width="3"/>'),
+  sound: svg(
+    '<path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" stroke="none"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>',
+  ),
+  muted: svg(
+    '<path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" stroke="none"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
+  ),
+  enter: svg('<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>'),
+  exit: svg('<path d="M9 4v5H4M15 4v5h5M15 20v-5h5M9 20v-5H4"/>'),
+  back: svg('<path d="M15 5l-7 7 7 7"/>', 24),
+  center:
+    '<svg viewBox="0 0 56 56" width="56" height="56"><circle cx="28" cy="28" r="27" fill="rgba(0,0,0,0.35)" stroke="rgba(255,255,255,0.85)" stroke-width="1.5"/><path d="M22.5 17.5v21l17-10.5z" fill="#fff"/></svg>',
+};
+
+/**
+ * `<video>`. It draws WeChat's controls itself: the play button in the
+ * middle while paused, and a bar with play, time, progress, mute, danmu and
+ * full screen that hides a few seconds into playback and comes back on a
+ * tap. `VideoContext` drives it through `omrCall`. Full screen covers the
+ * page's window, turned sideways for a horizontal video, and asks the shell,
+ * through an `omr-video-fullscreen` event the view forwards, to grow that
+ * window over the navigation bar, capsule and tab bar. Danmu, sent or from
+ * `danmu-list`, cross the video while danmu are on.
  */
 export class WxVideo extends Builtin {
   private readonly video: HTMLVideoElement;
   private readonly danmu: HTMLElement;
   /** The full screen box, through the shadow root so it wins over page styles. */
   private readonly fullScreenStyle: HTMLStyleElement;
+  private readonly parts: Record<
+    | "poster"
+    | "bar"
+    | "play"
+    | "current"
+    | "progress"
+    | "buffered"
+    | "played"
+    | "thumb"
+    | "duration"
+    | "mute"
+    | "danmuButton"
+    | "fullScreen"
+    | "centerPlay"
+    | "centerToggle"
+    | "top"
+    | "title",
+    HTMLElement
+  >;
+  private readonly applied = new Applied();
+  private readonly resize = new ResizeObserver(() => this.refresh());
   private fullScreen = false;
   private pictureInPicture = false;
   private danmuRow = 0;
+  /** Whether danmu show: `enable-danmu` at first, then the danmu button. */
+  private danmuOn?: boolean;
+  /** Where `danmu-list` was last checked, in seconds. */
+  private danmuClock = 0;
+  private controlsShown = true;
+  /** Whether the source played yet: the poster shows until it does. */
+  private started = false;
+  private hideTimer?: ReturnType<typeof setTimeout>;
+  /** `initial-time` waits for the source's metadata; its seek is not the user's. */
+  private initialSeek: "pending" | "seeking" | "" = "";
+  private lastBuffered = -1;
+  /** Where a drag on the progress bar would seek to, while dragging. */
+  private scrub?: number;
   constructor() {
     super();
     const root = this.shadow(`<style>
-      :host { display: inline-block; position: relative; width: 300px; height: 225px; background: #000; overflow: hidden; }
+      :host { display: inline-block; position: relative; width: 300px; height: 225px; background: #000; overflow: hidden; color: #fff; font: 12px/1 -apple-system, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
       video { display: block; width: 100%; height: 100%; }
+      [hidden] { display: none !important; }
+      button { all: unset; display: flex; flex: none; align-items: center; justify-content: center; cursor: pointer; }
+      .poster { position: absolute; inset: 0; background: #000 center / contain no-repeat; pointer-events: none; }
       .danmu { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
       .danmu span { position: absolute; left: 100%; white-space: nowrap; font: 16px/${DANMU_ROW}px sans-serif; text-shadow: 0 0 2px rgba(0, 0, 0, 0.8); }
-    </style><style></style><video playsinline></video><div class="danmu"></div><slot></slot>`);
+      .center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+      .toggle { width: 48px; height: 48px; border-radius: 50%; background: rgba(0, 0, 0, 0.35); }
+      .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; box-sizing: border-box; padding: 0 10px; display: flex; align-items: center; gap: 8px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.55)); }
+      .bar button { width: 28px; height: 28px; }
+      .time { flex: none; font-variant-numeric: tabular-nums; }
+      .progress { flex: 1; align-self: stretch; display: flex; align-items: center; touch-action: none; cursor: pointer; }
+      .progress.off { visibility: hidden; pointer-events: none; }
+      .track { position: relative; flex: 1; height: 2px; background: rgba(255, 255, 255, 0.3); }
+      .buffered, .played { position: absolute; left: 0; top: 0; bottom: 0; width: 0; }
+      .buffered { background: rgba(255, 255, 255, 0.55); }
+      .played { background: #fff; }
+      .thumb { position: absolute; top: 50%; left: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #fff; }
+      .bar .danmu-button { width: auto; height: 18px; padding: 0 5px; border: 1px solid rgba(255, 255, 255, 0.85); border-radius: 3px; font-size: 11px; }
+      .bar .danmu-button.on { border-color: #07c160; color: #07c160; }
+      .top { position: absolute; left: 0; right: 0; top: 0; height: 44px; box-sizing: border-box; padding: 0 12px 0 6px; display: flex; align-items: center; gap: 4px; background: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0)); font-size: 16px; }
+      .top button { width: 32px; height: 32px; }
+      .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    </style><style></style><video playsinline></video><div class="poster" hidden></div><div class="danmu"></div><button class="center toggle" type="button" hidden></button><button class="center center-play" type="button" aria-label="play" hidden>${VIDEO_ICONS.center}</button><div class="top" hidden><button class="back" type="button" aria-label="exit full screen">${VIDEO_ICONS.back}</button><span class="title"></span></div><div class="bar"><button class="play" type="button" aria-label="play"></button><span class="time current">00:00</span><div class="progress"><div class="track"><div class="buffered"></div><div class="played"></div><div class="thumb"></div></div></div><span class="time duration">00:00</span><button class="mute" type="button" aria-label="mute"></button><button class="danmu-button" type="button">弹幕</button><button class="fullscreen" type="button" aria-label="full screen"></button></div><slot></slot>`);
     this.fullScreenStyle = root.querySelectorAll("style")[1]!;
     this.video = root.querySelector("video")!;
     this.danmu = root.querySelector(".danmu")!;
-    for (const name of ["play", "pause", "ended", "waiting"]) {
-      this.video.addEventListener(name, () => emit(this, name));
+    const part = (selector: string) => root.querySelector<HTMLElement>(selector)!;
+    this.parts = {
+      poster: part(".poster"),
+      bar: part(".bar"),
+      play: part(".play"),
+      current: part(".current"),
+      progress: part(".progress"),
+      buffered: part(".buffered"),
+      played: part(".played"),
+      thumb: part(".thumb"),
+      duration: part(".duration"),
+      mute: part(".mute"),
+      danmuButton: part(".danmu-button"),
+      fullScreen: part(".fullscreen"),
+      centerPlay: part(".center-play"),
+      centerToggle: part(".toggle"),
+      top: part(".top"),
+      title: part(".title"),
+    };
+    this.listenToVideo();
+    this.listenToControls();
+  }
+  connectedCallback(): void {
+    this.resize.observe(this);
+  }
+  disconnectedCallback(): void {
+    this.resize.disconnect();
+    clearTimeout(this.hideTimer);
+    // A full-screen video that leaves the page gives the screen back
+    if (this.fullScreen) {
+      this.fullScreen = false;
+      this.fullScreenStyle.textContent = "";
+      this.notifyFullScreen(false);
     }
-    this.video.addEventListener("seeked", () =>
-      emit(this, "seekcomplete", { position: this.video.currentTime }),
-    );
-    this.video.addEventListener("timeupdate", () =>
-      emit(this, "timeupdate", {
-        currentTime: this.video.currentTime,
-        duration: this.video.duration || 0,
-      }),
-    );
-    this.video.addEventListener("loadedmetadata", () =>
+  }
+  private listenToVideo(): void {
+    const video = this.video;
+    video.addEventListener("play", () => {
+      this.started = true;
+      this.showControls(true);
+      emit(this, "play");
+    });
+    for (const name of ["pause", "ended"]) {
+      video.addEventListener(name, () => {
+        this.showControls(true);
+        emit(this, name);
+      });
+    }
+    video.addEventListener("waiting", () => emit(this, "waiting"));
+    video.addEventListener("volumechange", () => this.refresh());
+    video.addEventListener("seeking", () => (this.danmuClock = video.currentTime));
+    video.addEventListener("seeked", () => {
+      if (this.initialSeek === "seeking") this.initialSeek = "";
+      else emit(this, "seekcomplete", { position: video.currentTime });
+    });
+    video.addEventListener("timeupdate", () => {
+      this.refreshTime();
+      this.reportBuffered();
+      const now = video.currentTime;
+      const due = dueDanmu(this.props["danmu-list"], this.danmuClock, now);
+      this.danmuClock = now;
+      for (const item of due) this.sendDanmu(item.text, item.color);
+      emit(this, "timeupdate", { currentTime: now, duration: video.duration || 0 });
+    });
+    video.addEventListener("progress", () => this.reportBuffered());
+    video.addEventListener("loadedmetadata", () => {
+      const initial = this.num("initial-time", 0);
+      if (this.initialSeek === "pending" && initial > 0) {
+        this.initialSeek = "seeking";
+        video.currentTime = initial;
+      } else this.initialSeek = "";
+      this.refreshTime();
       emit(this, "loadedmetadata", {
-        width: this.video.videoWidth,
-        height: this.video.videoHeight,
-        duration: this.video.duration || 0,
-      }),
-    );
-    this.video.addEventListener("error", () => {
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration: video.duration || 0,
+      });
+    });
+    video.addEventListener("error", () => {
       // An empty src is no source, not an error
-      if (!this.video.getAttribute("src")) return;
-      emit(this, "error", { errMsg: "MEDIA_ERR_SRC_NOT_SUPPORTED" });
+      if (!video.getAttribute("src")) return;
+      emit(this, "error", {
+        errMsg: MEDIA_ERRORS[video.error?.code ?? 4] ?? MEDIA_ERRORS[4]!,
+      });
     });
   }
-  protected override update(): void {
-    const src = this.str("src");
-    if (!src) {
-      if (this.video.hasAttribute("src")) {
-        this.video.removeAttribute("src");
-        this.video.load();
+  private listenToControls(): void {
+    const { parts, video } = this;
+    const togglePlay = () => {
+      if (video.paused) this.play();
+      else video.pause();
+      this.showControls(true);
+    };
+    parts.play.addEventListener("click", togglePlay);
+    parts.centerToggle.addEventListener("click", togglePlay);
+    parts.centerPlay.addEventListener("click", togglePlay);
+    parts.mute.addEventListener("click", () => {
+      video.muted = !video.muted;
+      this.showControls(true);
+    });
+    parts.danmuButton.addEventListener("click", () => {
+      this.danmuOn = !this.danmuOn;
+      if (!this.danmuOn) this.danmu.replaceChildren();
+      this.showControls(true);
+    });
+    parts.fullScreen.addEventListener("click", () => {
+      this.setFullScreen(!this.fullScreen);
+      this.showControls(true);
+    });
+    parts.top.querySelector(".back")!.addEventListener("click", () => this.setFullScreen(false));
+    // A tap on the picture shows or hides the controls
+    video.addEventListener("click", () => {
+      if (this.flagOn("controls")) this.showControls(!this.controlsShown);
+    });
+    // Dragging along the progress bar seeks where it is let go
+    const fraction = (event: PointerEvent) => {
+      const box = parts.progress.querySelector(".track")!.getBoundingClientRect();
+      return box.width > 0 ? Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) : 0;
+    };
+    parts.progress.addEventListener("pointerdown", (event) => {
+      if (!(video.duration > 0)) return;
+      try {
+        parts.progress.setPointerCapture(event.pointerId);
+      } catch {
+        // The pointer is already gone
       }
-    } else if (this.video.getAttribute("src") !== src) {
-      this.video.setAttribute("src", src);
+      this.scrub = fraction(event) * video.duration;
+      this.refreshTime();
+      this.showControls(true);
+    });
+    parts.progress.addEventListener("pointermove", (event) => {
+      if (this.scrub === undefined) return;
+      this.scrub = fraction(event) * video.duration;
+      this.refreshTime();
+    });
+    const release = () => {
+      if (this.scrub === undefined) return;
+      video.currentTime = this.scrub;
+      this.scrub = undefined;
+      this.showControls(true);
+    };
+    parts.progress.addEventListener("pointerup", release);
+    parts.progress.addEventListener("pointercancel", release);
+  }
+  protected override update(): void {
+    const { applied, video } = this;
+    this.danmuOn ??= this.flag("enable-danmu");
+    const src = this.str("src");
+    if (applied.changed("src", src)) {
+      this.initialSeek = "pending";
+      this.started = false;
+      this.danmuClock = 0;
+      this.lastBuffered = -1;
+      if (src) video.setAttribute("src", src);
+      else if (video.hasAttribute("src")) {
+        video.removeAttribute("src");
+        video.load();
+      }
+      // The browser's own autoplay gives up silently when sound is not allowed
+      if (src && this.flag("autoplay")) this.play();
     }
+    // Only a change from the logic layer overrides what the user chose on the controls
+    const muted = this.flag("muted");
+    if (applied.changed("muted", muted)) video.muted = muted;
+    const loop = this.flag("loop");
+    if (applied.changed("loop", loop)) video.loop = loop;
+    // The browser's own poster goes at the first seek, such as initial-time's; WeChat's stays until playback
     const poster = this.str("poster");
-    if (poster) this.video.poster = poster;
-    else this.video.removeAttribute("poster");
-    this.video.controls = this.flagOn("controls");
-    this.video.muted = this.flag("muted");
-    this.video.loop = this.flag("loop");
-    this.video.autoplay = this.flag("autoplay");
-    this.video.style.objectFit = this.str("object-fit", "contain");
+    if (applied.changed("poster", poster)) {
+      this.parts.poster.style.backgroundImage = poster ? `url(${JSON.stringify(poster)})` : "";
+    }
+    video.style.objectFit = this.str("object-fit", "contain");
+    this.refresh();
+  }
+  /** Shows the controls for the current attributes and state. */
+  private refresh(): void {
+    const { parts, video } = this;
+    const plan = videoControls(this.props, { paused: video.paused, width: this.clientWidth });
+    const shown = this.controlsShown;
+    const icon = (el: HTMLElement, name: keyof typeof VIDEO_ICONS) => {
+      if (el.dataset.icon === name) return;
+      el.dataset.icon = name;
+      el.innerHTML = VIDEO_ICONS[name];
+    };
+    parts.poster.hidden = !plan.poster || this.started;
+    parts.bar.hidden = !plan.bar || !shown;
+    parts.play.hidden = !plan.play;
+    icon(parts.play, video.paused ? "play" : "pause");
+    parts.centerToggle.hidden = !plan.centerToggle || !shown;
+    icon(parts.centerToggle, video.paused ? "play" : "pause");
+    parts.centerPlay.hidden = !plan.centerPlay;
+    parts.progress.classList.toggle("off", !plan.progress);
+    parts.mute.hidden = !plan.mute;
+    icon(parts.mute, video.muted ? "muted" : "sound");
+    parts.danmuButton.hidden = !plan.danmu;
+    parts.danmuButton.classList.toggle("on", Boolean(this.danmuOn));
+    parts.fullScreen.hidden = !plan.fullScreen;
+    icon(parts.fullScreen, this.fullScreen ? "exit" : "enter");
+    // The title shows at the top in full screen, with the way back
+    parts.top.hidden = !this.fullScreen || !shown;
+    parts.title.textContent = this.str("title");
+    this.refreshTime();
+  }
+  private refreshTime(): void {
+    const { parts, video } = this;
+    const duration = video.duration > 0 && Number.isFinite(video.duration) ? video.duration : 0;
+    const time = this.scrub ?? video.currentTime;
+    parts.current.textContent = formatTime(time);
+    // `duration` names the length to show, before the metadata says or instead of it
+    parts.duration.textContent = formatTime(this.num("duration", 0) || duration);
+    const played = duration ? `${Math.min(100, (time / duration) * 100)}%` : "0%";
+    parts.played.style.width = played;
+    parts.thumb.style.left = played;
+  }
+  /** Shows or hides the controls; while playing they hide again a few seconds after the last touch. */
+  private showControls(show: boolean): void {
+    clearTimeout(this.hideTimer);
+    if (show && !this.video.paused) {
+      this.hideTimer = setTimeout(() => this.showControls(false), CONTROLS_MS);
+    }
+    if (show !== this.controlsShown) {
+      this.controlsShown = show;
+      if (this.flagOn("controls")) emit(this, "controlstoggle", { show });
+    }
+    this.refresh();
+  }
+  private reportBuffered(): void {
+    const { video } = this;
+    const buffered = bufferedPercent(video.buffered, video.currentTime, video.duration);
+    this.parts.buffered.style.width = `${buffered}%`;
+    if (buffered === this.lastBuffered) return;
+    this.lastBuffered = buffered;
+    emit(this, "progress", { buffered });
   }
   omrCall(method: string, args: unknown[]): void {
     const options = (args[0] ?? {}) as Record<string, unknown>;
@@ -241,7 +613,7 @@ export class WxVideo extends Builtin {
       void this.video.play().catch(() => {});
     });
   }
-  /** Covers the page's window; a horizontal video turns sideways, as the phone does. */
+  /** Covers the page's window, which the shell grows to the whole screen; a horizontal video turns sideways, as the phone does. */
   private setFullScreen(on: boolean, requested?: unknown): void {
     if (on === this.fullScreen) return;
     const asked = requested ?? this.props.direction;
@@ -262,13 +634,21 @@ export class WxVideo extends Builtin {
               ? "translateY(100vh) rotate(-90deg)"
               : "translateX(100vw) rotate(90deg)"
           } !important; }`;
+    this.notifyFullScreen(on);
+    this.refresh();
     emit(this, "fullscreenchange", {
       fullScreen: on,
       direction: on && direction !== 0 ? "horizontal" : "vertical",
     });
   }
+  /** Asks the shell, through the view and the logic layer, to raise the page over its chrome or put it back. */
+  private notifyFullScreen(on: boolean): void {
+    document.dispatchEvent(
+      new CustomEvent("omr-video-fullscreen", { detail: { video: this, fullScreen: on } }),
+    );
+  }
   private sendDanmu(text: string, color: unknown): void {
-    if (!this.flag("enable-danmu") || !text) return;
+    if (!this.danmuOn || !text) return;
     const item = document.createElement("span");
     item.textContent = text;
     item.style.color = typeof color === "string" && color ? color : "#fff";

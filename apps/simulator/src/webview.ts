@@ -7,7 +7,7 @@
  */
 import type { WebviewBundle } from "@omr/compiler";
 import { startView } from "@omr/renderer";
-import type { LogicToView } from "@omr/runtime";
+import type { AdConfig, LogicToView } from "@omr/runtime";
 
 /** The first message from the shell. */
 export interface WebviewInit {
@@ -19,6 +19,8 @@ export interface WebviewInit {
   styleV2: boolean;
   /** Whether built-in components take their dark defaults: app.json `"darkmode": true` in the dark theme. */
   dark: boolean;
+  /** `ad` of omr.config.json, for `<ad>` and `<ad-custom>`. */
+  ad?: AdConfig;
 }
 
 type FromShell =
@@ -44,6 +46,7 @@ addEventListener("message", (event: MessageEvent<FromShell>) => {
       hairline: data.hairline,
       assetBase: "/__omr/files/",
       styleV2: data.styleV2,
+      ad: data.ad,
       post: (message) =>
         parent.postMessage({ omr: "view", webviewId: data.webviewId, message }, shell),
     });

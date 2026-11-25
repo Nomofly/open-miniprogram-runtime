@@ -435,18 +435,20 @@ export function startLogic(
   const ownerInstance = (record: PageRecord, nodeId: number) =>
     nodeId === 0 ? record.instance : record.components.get(nodeId)?.instance;
 
-  const invokeHandler = (owner: Instance, handler: string, event: WxEvent) => {
+  /** Calls an event handler and returns what it returns. */
+  const invokeHandler = (owner: Instance, handler: string, event: WxEvent): unknown => {
     const fn = owner[handler];
     if (typeof fn !== "function") {
       console.warn(
         `[omr] ${owner.is} does not have a method "${handler}" to handle event "${event.type}".`,
       );
-      return;
+      return undefined;
     }
     try {
-      fn.call(owner, event);
+      return fn.call(owner, event);
     } catch (error) {
       reportError(error, `${owner.is}.${handler}`, owner);
+      return undefined;
     }
   };
 
@@ -1277,6 +1279,8 @@ export function startLogic(
           (def.options.addGlobalClass ? "apply-shared" : "isolated"),
         virtualHost: def.options.virtualHost === true,
         formField: def.behaviors.has("wx://form-field"),
+        formFieldGroup: def.behaviors.has("wx://form-field-group"),
+        formFieldButton: def.behaviors.has("wx://form-field-button"),
       },
       seq,
     });
@@ -1359,10 +1363,26 @@ export function startLogic(
         break;
       case "event": {
         let owner = ownerInstance(record, message.ownerId);
+        // An input's handler may return the field's new value; the view waits for the answer
+        const { replyId } = message;
+        if (replyId !== undefined) {
+          const result =
+            owner && message.handler
+              ? invokeHandler(owner, message.handler, message.event)
+              : undefined;
+          const value =
+            typeof result === "string" || typeof result === "number" ? String(result) : undefined;
+          sendView(record, { type: "eventResult", replyId, value });
+          break;
+        }
         if (!owner) break;
         const event = message.event;
         if (message.openType) {
-          const detail = await wxApi!.openTypeDetail(message.openType, event.currentTarget.id);
+          const detail = await wxApi!.openTypeDetail(
+            message.openType,
+            event.currentTarget.id,
+            message.openTypeProps,
+          );
           if (!detail) break;
           event.detail = { ...event.detail, ...detail };
           // The page or component may be gone once the user answers the dialog
@@ -1427,6 +1447,13 @@ export function startLogic(
         break;
       case "navigationBar":
         applyNavigationBar(record, message.attributes);
+        break;
+      case "videoFullScreen":
+        post({
+          type: "videoFullScreen",
+          webviewId: record.webviewId,
+          fullScreen: message.fullScreen,
+        });
         break;
       case "pageContainer":
         record.containerOpen = message.open;

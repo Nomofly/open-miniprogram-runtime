@@ -213,14 +213,58 @@ export function createWx(host: WxHost) {
   const maskPhone = (phone: string) =>
     phone.length >= 7 ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone;
 
+  /** Base64 of `length` bytes derived from `seed`: stands in for ciphertext that is never decrypted. */
+  const opaqueBase64 = (seed: string, length: number) => {
+    let hash = 2166136261;
+    let binary = "";
+    for (let i = 0; i < length; i++) {
+      hash = Math.imul(hash ^ seed.charCodeAt(i % seed.length) ^ i, 16777619);
+      binary += String.fromCharCode(hash >>> 24);
+    }
+    return btoa(binary);
+  };
+
+  /**
+   * The settings page of `wx.openSetting` and the `openSetting` button: one switch per
+   * scope the Mini Program has asked for. Resolves with the settings once the user goes back.
+   */
+  const openSettingPage = async () => {
+    if (consent === "ask") {
+      const result = await host.ui("openSetting", {
+        appName: manifest.appName,
+        scopes: Object.entries(authSetting).map(([scope, allowed]) => ({
+          scope,
+          description: SCOPE_DESCRIPTIONS[scope] ?? scope,
+          allowed,
+        })),
+      });
+      const changed = (result.authSetting ?? {}) as Record<string, unknown>;
+      for (const [scope, allowed] of Object.entries(changed)) {
+        if (scope in authSetting && typeof allowed === "boolean") authSetting[scope] = allowed;
+      }
+    }
+    return { authSetting: { ...authSetting } };
+  };
+
+  /** Splits a Mini Program path such as `pages/a/a?id=7` into `path` and `query`, as `bindcontact` gives them. */
+  const splitPath = (url: string) => {
+    const mark = url.indexOf("?");
+    const query: Record<string, string> = {};
+    if (mark < 0) return { path: url, query };
+    for (const [name, value] of new URLSearchParams(url.slice(mark + 1))) query[name] = value;
+    return { path: url.slice(0, mark), query };
+  };
+
   /**
    * The detail of a button `open-type` event, or undefined when the event does
    * not fire. A combined open-type such as `getPhoneNumber|agreePrivacyAuthorization`
-   * arrives as one call per part, the agreement first.
+   * arrives as one call per part, the agreement first. `props` are the button
+   * attributes the open-type reads, such as `send-message-path` for `contact`.
    */
   const openTypeDetail = async (
     openType: string,
     buttonId: string,
+    props: Record<string, unknown> = {},
   ): Promise<Record<string, unknown> | undefined> => {
     switch (openType) {
       case "agreePrivacyAuthorization":
@@ -238,11 +282,17 @@ export function createWx(host: WxHost) {
           phoneNumber: maskPhone(user.phoneNumber),
         });
         if (!allowed) return { errMsg: `${openType}:fail user deny` };
+        const code = issueCode("phone", {
+          phoneNumber: user.phoneNumber,
+          countryCode: user.countryCode,
+        });
+        if (openType === "getRealtimePhoneNumber") return { code, errMsg: `${openType}:ok` };
+        // Code written before the code exchange checks the encrypted fields; they do not decrypt
         return {
-          code: issueCode("phone", {
-            phoneNumber: user.phoneNumber,
-            countryCode: user.countryCode,
-          }),
+          code,
+          encryptedData: opaqueBase64(code, 192),
+          iv: opaqueBase64(`iv:${code}`, 16),
+          cloudID: `01_${opaqueBase64(`cloud:${code}`, 48).replace(/[+/=]/g, "")}`,
           errMsg: `${openType}:ok`,
         };
       }
@@ -263,7 +313,42 @@ export function createWx(host: WxHost) {
         }
         return { ...userInfoResult(), errMsg: "getUserInfo:ok" };
       case "openSetting":
-        return { authSetting: { ...authSetting }, errMsg: "openSetting:ok" };
+        return { ...(await openSettingPage()), errMsg: "openSetting:ok" };
+      case "contact": {
+        // bindcontact fires when the user comes back, with the card they tapped in the chat
+        const attribute = (name: string) => {
+          const value = props[name];
+          return typeof value === "string" || typeof value === "number" ? String(value) : "";
+        };
+        const card = Boolean(props["show-message-card"]);
+        const result =
+          consent === "ask"
+            ? await host.ui("contact", {
+                appName: manifest.appName,
+                ...(card
+                  ? {
+                      card: {
+                        title: attribute("send-message-title"),
+                        img: attribute("send-message-img"),
+                        path: attribute("send-message-path"),
+                      },
+                    }
+                  : {}),
+              })
+            : {};
+        const tapped = card && result.tapped === true;
+        return {
+          ...splitPath(tapped ? attribute("send-message-path") : ""),
+          errMsg: "enterContact:ok",
+        };
+      }
+      case "launchApp":
+        // Only a Mini Program opened from an app (scene 1069) can go back to it; the view binds this to binderror
+        return { errMsg: "invalid scene" };
+      case "feedback":
+        // WeChat tells the Mini Program nothing about the feedback page
+        if (consent === "ask") void host.ui("feedback", { appName: manifest.appName });
+        return undefined;
       default:
         return {};
     }
@@ -627,7 +712,7 @@ export function createWx(host: WxHost) {
       const tapped = hasTapGesture();
       return asyncApi("openSetting", async () => {
         if (!tapped) requireTapGesture();
-        return { authSetting: { ...authSetting } };
+        return openSettingPage();
       })(options);
     },
     authorize: asyncApi("authorize", async (options) => {

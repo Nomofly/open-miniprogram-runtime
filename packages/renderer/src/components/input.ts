@@ -148,6 +148,17 @@ export class WxInput extends Builtin {
   omrFormValue(): unknown {
     return this.field?.value ?? "";
   }
+  omrReplaceValue(value: string): void {
+    const field = this.field;
+    if (!field) return;
+    const maxlength = this.num("maxlength", 140);
+    field.value = maxlength >= 0 ? value.slice(0, maxlength) : value;
+    if (document.activeElement === field) {
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
+    this.syncPlaceholder();
+    this.onInput();
+  }
   omrReset(): void {
     if (this.field) this.field.value = "";
     this.syncPlaceholder();

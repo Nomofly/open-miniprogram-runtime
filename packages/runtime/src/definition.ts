@@ -84,7 +84,7 @@ const behaviorsOf = (options: Record<string, unknown>): (Record<string, unknown>
 const BUILTIN_BEHAVIORS: Record<string, Record<string, unknown>> = {
   // A form collects the `value` of a component with this behavior under its `name`
   "wx://form-field": { properties: { name: String, value: null } },
-  // The view does not scope forms by component, so these need nothing more
+  // A form sees into a component's own template only through these; the view checks them
   "wx://form-field-group": {},
   "wx://form-field-button": {},
   // Makes `selectComponent` return what `export` returns

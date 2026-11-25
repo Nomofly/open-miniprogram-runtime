@@ -185,6 +185,45 @@ describe("logic layer", () => {
     expect(log()).toEqual(["checkSession:fail session time out, need relogin", "checkSession:ok"]);
   });
 
+  test("what a bindinput handler returns is sent back to replace the input's value", () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          upper(e) { return e.detail.value.toUpperCase(); },
+          count(e) { return e.detail.value.length; },
+          keep() {},
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    const input = (handler: string, replyId: number) =>
+      view(1, {
+        type: "event",
+        ownerId: 0,
+        handler,
+        replyId,
+        event: {
+          type: "input",
+          timeStamp: 0,
+          target,
+          currentTarget: target,
+          detail: { value: "abc" },
+        },
+      });
+    input("upper", 1);
+    input("count", 2);
+    input("keep", 3);
+    expect(toView(sent, "eventResult")).toEqual([
+      { type: "eventResult", replyId: 1, value: "ABC" },
+      { type: "eventResult", replyId: 2, value: "3" },
+      // Returning nothing keeps what the user typed, but the view still hears back
+      { type: "eventResult", replyId: 3, value: undefined },
+    ]);
+  });
+
   test("the chooseAvatar button gives the avatar as a temporary file that wx.uploadFile can read", async () => {
     const { view, log } = boot(
       {
@@ -1089,5 +1128,143 @@ describe("logic layer", () => {
     const page = currentPage();
     page.getTabBar().setData({ selected: 0 });
     expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 4, patch: { selected: 0 } });
+  });
+
+  /** Sends a button open-type event of page 1, as the view does after a tap. */
+  const openTypeEvent = (
+    view: (webviewId: number, message: ViewToLogic) => void,
+    openType: string,
+    type: string,
+    handler: string,
+    openTypeProps?: Record<string, unknown>,
+  ) => {
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler,
+      openType,
+      openTypeProps,
+      event: { type, timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+  };
+  const uiCalls = (sent: LogicToShell[], name: string) =>
+    sent.filter(
+      (message): message is Extract<LogicToShell, { type: "ui" }> =>
+        message.type === "ui" && message.name === name,
+    );
+
+  test("the openSetting button shows the scopes asked for, and a switch turned on there reaches getSetting", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onSetting(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { authSetting: { "scope.userLocation": false, "scope.camera": true } } },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "openSetting", "opensetting", "onSetting");
+    await settle();
+    const [ui] = uiCalls(sent, "openSetting");
+    expect(ui!.args).toMatchObject({
+      appName: "Demo",
+      scopes: [
+        { scope: "scope.userLocation", description: "获取你的位置信息", allowed: false },
+        { scope: "scope.camera", description: "使用你的摄像头", allowed: true },
+      ],
+    });
+    // The event fires only when the user goes back
+    expect(log()).toEqual([]);
+
+    handle({
+      type: "uiResult",
+      callId: ui!.callId,
+      result: { authSetting: { "scope.userLocation": true, "scope.camera": true } },
+    });
+    await settle();
+    const authSetting = { "scope.userLocation": true, "scope.camera": true };
+    expect(log()).toEqual([{ authSetting, errMsg: "openSetting:ok" }]);
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    await expect(wx.getSetting()).resolves.toMatchObject({ authSetting });
+  });
+
+  test("the contact button fires bindcontact once the chat closes, with the tapped card's path and query", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onContact(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "contact", "contact", "onContact", {
+      "show-message-card": true,
+      "send-message-title": "Order 7",
+      "send-message-img": "/images/order.png",
+      "send-message-path": "pages/order/order?id=7&from=chat",
+    });
+    await settle();
+    const [withCard] = uiCalls(sent, "contact");
+    expect(withCard!.args).toEqual({
+      appName: "Demo",
+      card: {
+        title: "Order 7",
+        img: "/images/order.png",
+        path: "pages/order/order?id=7&from=chat",
+      },
+    });
+    expect(log()).toEqual([]);
+    handle({ type: "uiResult", callId: withCard!.callId, result: { tapped: true } });
+    await settle();
+
+    // Closed without tapping a card: path and query are empty
+    openTypeEvent(view, "contact", "contact", "onContact", {});
+    await settle();
+    const [, plain] = uiCalls(sent, "contact");
+    expect(plain!.args).toEqual({ appName: "Demo" });
+    handle({ type: "uiResult", callId: plain!.callId, result: {} });
+    await settle();
+    expect(log()).toEqual([
+      { path: "pages/order/order", query: { id: "7", from: "chat" }, errMsg: "enterContact:ok" },
+      { path: "", query: {}, errMsg: "enterContact:ok" },
+    ]);
+  });
+
+  test("the launchApp button fails with invalid scene, and the feedback button fires nothing", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onError(e) { getApp().log.push(e.type, e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    // The view sends launchApp as the button's error event
+    openTypeEvent(view, "launchApp", "error", "onError");
+    openTypeEvent(view, "feedback", "", "onError");
+    await settle();
+    expect(log()).toEqual(["error", { errMsg: "invalid scene" }]);
+    expect(uiCalls(sent, "feedback")).toHaveLength(1);
+  });
+
+  test("the getPhoneNumber detail has encrypted data and an iv next to the code, for older backends", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onPhone(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow", privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "getPhoneNumber", "getphonenumber", "onPhone");
+    await settle();
+    const [detail] = log() as Record<string, string>[];
+    expect(detail).toMatchObject({ errMsg: "getPhoneNumber:ok" });
+    expect(decodeCode(detail!.code!)).toMatchObject({ kind: "phone" });
+    expect(detail!.encryptedData).toMatch(/^[A-Za-z0-9+/]{100,}={0,2}$/);
+    expect(atob(detail!.iv!)).toHaveLength(16);
+    expect(detail!.cloudID).toMatch(/^\w+$/);
   });
 });

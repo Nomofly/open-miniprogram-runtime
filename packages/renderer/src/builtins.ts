@@ -10,6 +10,7 @@
  */
 import { CANVAS_DEFINITIONS } from "./canvas.ts";
 import { toText } from "./expression.ts";
+import { WxAd, WxAdCustom } from "./components/ad.ts";
 import { BRAND_GREEN, Builtin, emit, lengthOf } from "./components/base.ts";
 import {
   WxMatchMedia,
@@ -295,6 +296,12 @@ class WxSlider extends Builtin {
   omrFormValue(): unknown {
     return Number(this.range.value);
   }
+  /** A form's reset moves the slider to its lowest value, as it clears an input. */
+  omrReset(): void {
+    this.range.value = this.range.min;
+    this.label.textContent = this.range.value;
+    this.fill();
+  }
 }
 
 class WxProgress extends Builtin {
@@ -518,8 +525,6 @@ const PLACEHOLDER_TAGS = [
   "channel-live",
   "channel-video",
   "web-view",
-  "ad",
-  "ad-custom",
   "official-account",
   "official-account-publish",
   "store-coupon",
@@ -561,6 +566,8 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-match-media", WxMatchMedia],
   ["wx-page-meta", WxPageMeta],
   ["wx-open-data", WxOpenData],
+  ["wx-ad", WxAd],
+  ["wx-ad-custom", WxAdCustom],
   ...CANVAS_DEFINITIONS,
   ...PLACEHOLDER_TAGS.map((tag): [string, CustomElementConstructor] => [
     `wx-${tag}`,

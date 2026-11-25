@@ -9,6 +9,8 @@ export interface BuiltinElement extends HTMLElement {
   /** The value a `<form>` submits for this control, by its `name`. */
   omrFormValue?(): unknown;
   omrReset?(): void;
+  /** Replaces an input's value with what its `bindinput` handler returned; fires no event. */
+  omrReplaceValue?(value: string): void;
   /** Fills `<input type="nickname">` with the nickname the user chose above the keyboard. */
   omrFill?(value: string): void;
   /** Tells a `<camera>` whether it may show its preview; `error` is its `binderror` message when not. */

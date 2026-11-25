@@ -1,9 +1,10 @@
 /**
  * Native UI drawn by the shell over the page: toasts, modals, action sheets, the
  * privacy popup, the consent dialogs of authorization, the nickname bar above
- * the keyboard, payment and subscription sheets, the scanner, location pages and
- * the image viewer. Every button has a `data-omr-action` attribute, so automation
- * can answer dialogs by selector.
+ * the keyboard, payment and subscription sheets, the scanner, location pages,
+ * the image viewer, and the settings, customer service and feedback pages.
+ * Every button has a `data-omr-action` attribute, so automation can answer
+ * dialogs by selector.
  */
 
 export type UiHandler = (
@@ -159,6 +160,118 @@ export function createUi(
       h("span", { class: "omr-page-bar-title" }, title),
       h("span", {}),
     );
+
+  /** The bar of a full-screen WeChat page with a back arrow instead of a cancel button. */
+  const backBar = (title: string, onBack: () => void) =>
+    h(
+      "div",
+      { class: "omr-page-bar" },
+      button("‹", "back", onBack, "omr-page-bar-back"),
+      h("span", { class: "omr-page-bar-title" }, title),
+      h("span", {}),
+    );
+
+  /** The settings page of `wx.openSetting`: a switch per scope; going back resolves with the settings. */
+  const settings = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const scopes = (Array.isArray(args.scopes) ? args.scopes : []) as {
+        scope: string;
+        description: string;
+        allowed: boolean;
+      }[];
+      const authSetting: Record<string, boolean> = {};
+      const rows = scopes.map(({ scope, description, allowed }) => {
+        authSetting[scope] = allowed;
+        const toggle = h("button", {
+          type: "button",
+          class: `omr-switch${allowed ? " omr-switch-on" : ""}`,
+          role: "switch",
+          "aria-checked": String(allowed),
+          "aria-label": description,
+          "data-omr-action": `toggle-${scope}`,
+        });
+        toggle.addEventListener("click", () => {
+          const on = !authSetting[scope];
+          authSetting[scope] = on;
+          toggle.classList.toggle("omr-switch-on", on);
+          toggle.setAttribute("aria-checked", String(on));
+        });
+        return h(
+          "div",
+          { class: "omr-settings-row", "data-scope": scope },
+          h("span", {}, description),
+          toggle,
+        );
+      });
+      return h(
+        "div",
+        { class: "omr-settings", "data-omr-dialog": "openSetting" },
+        backBar("设置", () => close({ authSetting })),
+        h("div", { class: "omr-settings-section" }, `允许${text(args.appName) || appName}使用我的`),
+        rows.length
+          ? h("div", { class: "omr-settings-group" }, ...rows)
+          : h("div", { class: "omr-settings-empty" }, "小程序尚未申请使用你的信息"),
+      );
+    });
+
+  /** The customer service chat of a `contact` button; resolves `{ tapped: true }` when the user taps the card. */
+  const contactChat = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const name = text(args.appName) || appName;
+      const card = args.card as { title: string; img: string; path: string } | undefined;
+      let cardButton: HTMLElement | undefined;
+      if (card) {
+        cardButton = button("", "openCard", () => close({ tapped: true }), "omr-contact-card");
+        cardButton.append(
+          h("span", { class: "omr-contact-card-app" }, name),
+          h("span", { class: "omr-contact-card-title" }, card.title || name),
+          card.img
+            ? h("img", { class: "omr-contact-card-img", src: resolveAsset(card.img), alt: "" })
+            : h("span", { class: "omr-contact-card-img" }),
+          h("span", { class: "omr-contact-card-footer" }, "小程序"),
+        );
+      }
+      return h(
+        "div",
+        { class: "omr-contact", "data-omr-dialog": "contact" },
+        backBar("客服消息", () => close({})),
+        h("div", { class: "omr-contact-name" }, name),
+        h(
+          "div",
+          { class: "omr-contact-messages" },
+          h(
+            "div",
+            { class: "omr-contact-message" },
+            h("span", { class: "omr-app-icon" }, name.slice(0, 1)),
+            h("div", { class: "omr-contact-bubble" }, "你好，请问有什么可以帮你？"),
+          ),
+          cardButton && h("div", { class: "omr-contact-hint" }, "你可能要发送的小程序"),
+          cardButton,
+        ),
+      );
+    });
+
+  /** The feedback page of a `feedback` button; WeChat tells the Mini Program nothing about it. */
+  const feedback = () =>
+    dialog("full", (close) => {
+      const input = h("textarea", {
+        class: "omr-feedback-input",
+        placeholder: "请填写10个字以上的问题描述，以便我们提供更好的帮助",
+      }) as HTMLTextAreaElement;
+      return h(
+        "div",
+        { class: "omr-feedback", "data-omr-dialog": "feedback" },
+        backBar("意见反馈", () => close({})),
+        h("div", { class: "omr-settings-section" }, "问题和意见"),
+        input,
+        button(
+          "提交",
+          "submit",
+          () => close({ submitted: true, content: input.value }),
+          "omr-feedback-submit",
+        ),
+      );
+    });
 
   /** A map without tiles: a grid, a pin and the coordinates. */
   const mapPlaceholder = (latitude: unknown, longitude: unknown) =>
@@ -471,6 +584,12 @@ export function createUi(
         );
       case "previewImage":
         return preview(args);
+      case "openSetting":
+        return settings(args);
+      case "contact":
+        return contactChat(args);
+      case "feedback":
+        return feedback();
       default:
         console.warn(`[omr] the simulator does not show "${name}"`);
         return {};

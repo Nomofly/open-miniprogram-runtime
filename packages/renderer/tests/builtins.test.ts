@@ -148,3 +148,34 @@ describe("rich-text", () => {
     expect(link.textContent).toBe("a\u00a0\u00a0b");
   });
 });
+
+describe("form controls", () => {
+  test("a picker without value submits its mode's default, and a reset returns to it", () => {
+    const selector = mount("wx-picker", { range: ["a", "b"] });
+    expect(selector.omrFormValue!()).toBe(0);
+    const multi = mount("wx-picker", { mode: "multiSelector", range: [["a"], ["b", "c"]] });
+    expect(multi.omrFormValue!()).toEqual([0, 0]);
+    const date = mount("wx-picker", { mode: "date", value: "2026-11-25" });
+    expect(date.omrFormValue!()).toBe("2026-11-25");
+    date.omrReset!();
+    expect(date.omrFormValue!()).toBe("");
+  });
+
+  test("a reset moves a slider to its lowest value", () => {
+    const slider = mount("wx-slider", { min: 10, max: 50, value: 30 });
+    expect(slider.omrFormValue!()).toBe(30);
+    slider.omrReset!();
+    expect(slider.omrFormValue!()).toBe(10);
+  });
+
+  test("an input's value replaced by its handler keeps maxlength and fires no input event", () => {
+    const input = mount("wx-input", { maxlength: 4 });
+    const fired: string[] = [];
+    input.addEventListener("omr-event", (event) =>
+      fired.push((event as CustomEvent<{ name: string }>).detail.name),
+    );
+    input.omrReplaceValue!("abcdef");
+    expect(input.omrFormValue!()).toBe("abcd");
+    expect(fired).toEqual([]);
+  });
+});

@@ -4,6 +4,7 @@
  */
 import type { WebviewBundle, WxmlFile } from "@omr/compiler";
 import type {
+  AdConfig,
   ComponentListeners,
   ComponentViewOptions,
   LogicToView,
@@ -20,6 +21,7 @@ import { createObservers } from "./observers.ts";
 import { createAnimations } from "./animation.ts";
 import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
+import { setAdConfig } from "./components/ad.ts";
 import {
   convertRpx,
   renderScope,
@@ -38,6 +40,8 @@ export interface ViewOptions {
   assetBase: string;
   /** Whether app.json sets `"style": "v2"`. */
   styleV2: boolean;
+  /** `ad` of the simulator config: whether `<ad>` and `<ad-custom>` fill or fail. */
+  ad?: AdConfig;
   post: (message: ViewToLogic) => void;
 }
 
@@ -58,11 +62,19 @@ const OPEN_TYPE_EVENTS: Record<string, string> = {
   chooseAvatar: "chooseavatar",
   openSetting: "opensetting",
   contact: "contact",
-  launchApp: "launchapp",
+  // The simulator is never opened from an app (scene 1069), so launchApp always fails
+  launchApp: "error",
   agreePrivacyAuthorization: "agreeprivacyauthorization",
   share: "",
   feedback: "",
 };
+/** The attributes of a `contact` button the customer service chat shows. */
+const CONTACT_ATTRIBUTES = [
+  "show-message-card",
+  "send-message-title",
+  "send-message-img",
+  "send-message-path",
+];
 
 interface Scope extends RenderScope {
   initialized: boolean;
@@ -96,6 +108,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   const { bundle, post } = options;
   const hairline = options.hairline ?? 1;
   defineBuiltins();
+  setAdConfig(options.ad);
 
   const style = document.createElement("style");
   style.textContent = `${BASE_CSS}\n${PULL_DOWN_CSS}\n${HOST_CSS}\n${convertRpx(bundle.css, options.windowWidth, hairline)}`;
@@ -579,6 +592,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     detail: Record<string, unknown>,
     bubbles: boolean,
     extra: { touches?: unknown[]; changedTouches?: unknown[] } = {},
+    replyId?: number,
   ): boolean => {
     const path: Element[] = [];
     for (let el: Element | undefined = target; el; el = bubbles ? managedParent(el) : undefined) {
@@ -605,6 +619,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
               mark: {},
               ...extra,
             },
+            ...(replyId === undefined ? {} : { replyId }),
           });
         }
         if (binding.catch) return true;
@@ -638,6 +653,9 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
 
   const isDisabled = (el: Element | null) => !!el && Boolean(states.get(el)?.props.disabled);
 
+  /** The controls a `<label>` passes its taps to. */
+  const LABEL_CONTROLS = "wx-button, wx-checkbox, wx-radio, wx-switch, wx-input, wx-textarea";
+
   /** What a tap does beyond the tap event: button open-types and forms, navigators, controls. */
   const afterTap = (target: Element) => {
     const button = target.closest("wx-button");
@@ -659,6 +677,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
           ownerId: state.ownerId,
           handler: binding?.handler ?? "",
           openType,
+          ...(openType === "contact"
+            ? {
+                openTypeProps: Object.fromEntries(
+                  CONTACT_ATTRIBUTES.map((name) => [name, state.props[name]]),
+                ),
+              }
+            : {}),
           event: {
             type: eventName,
             timeStamp: Math.round(performance.now()),
@@ -670,7 +695,11 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         });
       }
       const formType = state.props["form-type"];
-      const form = button.closest("wx-form");
+      // A button inside a component reaches an outer form only through wx://form-field-button
+      let form = button.closest("wx-form");
+      while (form && !formReaches(form, button, "formFieldButton")) {
+        form = form.parentElement?.closest("wx-form") ?? null;
+      }
       if (form && (formType === "submit" || formType === "reset")) submitForm(form, formType);
     }
     const navigator = target.closest("wx-navigator");
@@ -689,21 +718,49 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     const label = target.closest("wx-label");
     if (control) {
       control.omrActivate?.();
-    } else if (label) {
+    } else if (label && !target.closest("wx-button, wx-input, wx-textarea")) {
+      // `for` names a control in the label's own template; otherwise the first control inside it
+      const owner = states.get(label)?.ownerId;
       const forId = states.get(label)?.props.for;
       const linked = forId
-        ? document.getElementById(toText(forId))
-        : label.querySelector("wx-checkbox, wx-radio, wx-switch");
-      (linked as Partial<BuiltinElement> | null)?.omrActivate?.();
-      if (linked && /^WX-(INPUT|TEXTAREA)$/.test(linked.tagName)) {
+        ? [...(scopes.get(owner ?? -1)?.root ?? document).querySelectorAll("[id]")].find(
+            (el) => el.id === toText(forId) && states.get(el)?.ownerId === owner,
+          )
+        : label.querySelector(LABEL_CONTROLS);
+      if (!linked) return;
+      if (/^WX-(INPUT|TEXTAREA)$/.test(linked.tagName)) {
         linked.querySelector<HTMLElement>("input, textarea")?.focus();
+      } else if (linked.tagName === "WX-BUTTON") {
+        if (!isDisabled(linked)) dispatch(linked, "tap", {}, true);
+        afterTap(linked);
+      } else {
+        (linked as Partial<BuiltinElement>).omrActivate?.();
       }
     }
   };
 
+  /**
+   * Whether a form sees an element: the element is in the form's template, or
+   * every component between them has the behavior that opens it to forms.
+   */
+  const formReaches = (
+    form: Element,
+    el: Element,
+    behavior: "formFieldGroup" | "formFieldButton",
+  ): boolean => {
+    const formOwner = states.get(form)?.ownerId;
+    for (let scope = scopes.get(states.get(el)?.ownerId ?? -1); scope; scope = scope.owner) {
+      if (scope.nodeId === formOwner) return true;
+      if (!scope.options[behavior]) return false;
+    }
+    return false;
+  };
+
   const submitForm = (form: Element, kind: "submit" | "reset") => {
     const controls = [...form.querySelectorAll("*")].filter(
-      (el) => typeof (el as Partial<BuiltinElement>).omrFormValue === "function",
+      (el) =>
+        typeof (el as Partial<BuiltinElement>).omrFormValue === "function" &&
+        formReaches(form, el, "formFieldGroup"),
     ) as BuiltinElement[];
     if (kind === "reset") {
       for (const control of controls) control.omrReset?.();
@@ -718,7 +775,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     // Custom components with wx://form-field submit their `value` data
     for (const host of form.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
       const scope = states.get(host)?.scope;
-      if (!scope?.options.formField) continue;
+      if (!scope?.options.formField || !formReaches(form, host, "formFieldGroup")) continue;
       const name = toText(scope.data.name);
       if (name) value[name] = scope.data.value;
     }
@@ -842,10 +899,26 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     (event) => {
       const target = managed(event.target);
       const { name, detail } = (event as CustomEvent<OmrEventDetail>).detail;
-      if (target) dispatch(target, name, detail, false);
+      if (!target) return;
+      // A bindinput handler may return the field's new value, so the input waits for its answer
+      const handled =
+        name === "input" &&
+        /^WX-(INPUT|TEXTAREA)$/.test(target.tagName) &&
+        states.get(target)?.events.some((binding) => binding.name === "input" && binding.handler);
+      if (!handled) {
+        dispatch(target, name, detail, false);
+        return;
+      }
+      const replyId = ++nextReplyId;
+      inputReplies.set(replyId, { input: target as BuiltinElement, value: toText(detail.value) });
+      dispatch(target, name, detail, false, {}, replyId);
     },
     true,
   );
+
+  /** Inputs waiting for their bindinput handler's result, with the value the handler saw. */
+  const inputReplies = new Map<number, { input: BuiltinElement; value: string }>();
+  let nextReplyId = 0;
 
   // <input type="nickname"> asks the logic layer for the system nickname bar while it has focus
   let nicknameInput: BuiltinElement | undefined;
@@ -909,12 +982,28 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     }
   });
 
-  window.addEventListener("resize", () =>
+  // A full-screen <video> asks the shell to grow the page's window over its chrome. That
+  // window is the video's, not the page's: its resize, and the one back, are not the page's
+  const fullScreenVideos = new Set<Element>();
+  document.addEventListener("omr-video-fullscreen", (event) => {
+    const { video, fullScreen } = (event as CustomEvent<{ video: Element; fullScreen: boolean }>)
+      .detail;
+    const before = fullScreenVideos.size > 0;
+    if (fullScreen) fullScreenVideos.add(video);
+    else fullScreenVideos.delete(video);
+    if (before !== fullScreenVideos.size > 0)
+      post({ type: "videoFullScreen", fullScreen: !before });
+  });
+  let windowSize = `${window.innerWidth}x${window.innerHeight}`;
+  window.addEventListener("resize", () => {
+    const size = `${window.innerWidth}x${window.innerHeight}`;
+    if (fullScreenVideos.size > 0 || size === windowSize) return;
+    windowSize = size;
     post({
       type: "resize",
       size: { windowWidth: window.innerWidth, windowHeight: window.innerHeight },
-    }),
-  );
+    });
+  });
 
   let scrollQueued = false;
   let atBottom = false;
@@ -1078,6 +1167,19 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "canvasFrame":
         canvasElements.get(message.canvasNodeId)?.omrDraw(message.bitmap);
         return;
+      case "eventResult": {
+        const pending = inputReplies.get(message.replyId);
+        inputReplies.delete(message.replyId);
+        // Typing that came after the event wins over the handler's late answer
+        if (
+          pending &&
+          message.value !== undefined &&
+          pending.input.omrFormValue?.() === pending.value
+        ) {
+          pending.input.omrReplaceValue?.(message.value);
+        }
+        return;
+      }
       case "closePageContainer":
         openContainers.at(-1)?.omrClose();
         return;

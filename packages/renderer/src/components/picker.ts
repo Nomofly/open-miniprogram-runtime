@@ -189,8 +189,24 @@ export class WxPicker extends Builtin {
     this.model = undefined;
   }
 
+  /** Without a `value`, a form gets the mode's default: the first option, or nothing chosen. */
   omrFormValue(): unknown {
-    return this.value;
+    return this.value ?? this.defaultValue();
+  }
+  omrReset(): void {
+    this.value = undefined;
+  }
+  private defaultValue(): unknown {
+    switch (this.str("mode", "selector")) {
+      case "selector":
+        return 0;
+      case "multiSelector":
+        return Array.isArray(this.props.range) ? this.props.range.map(() => 0) : [];
+      case "region":
+        return [];
+      default:
+        return "";
+    }
   }
 
   private label(item: unknown): string {

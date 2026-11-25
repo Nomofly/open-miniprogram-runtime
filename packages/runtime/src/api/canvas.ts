@@ -10,6 +10,8 @@
 import { fsFileUrl, isFsPath } from "./context.ts";
 import { asyncApi, type AnyFunction, type Options } from "./common.ts";
 import type { ApiContext } from "./context.ts";
+import { bytesToBase64 } from "./files.ts";
+import { proxyStream } from "./network.ts";
 
 /** What the view answers for the `node` field of a `<canvas>`. */
 interface CanvasNodeInfo {
@@ -29,11 +31,122 @@ function imageUrl(src: string): string {
   return `/__omr/files/${src.replace(/^\/+/, "")}`;
 }
 
+/** How long a network image may take, as `wx.downloadFile` allows by default. */
+const IMAGE_TIMEOUT = 60_000;
+
 async function loadBitmap(src: string): Promise<ImageBitmap> {
+  // Network images go through the simulator's request proxy: WeChat loads them without CORS
+  if (/^https?:\/\//i.test(src) && !isFsPath(src)) {
+    const { head, bytes } = await proxyStream(
+      { url: src, method: "GET", header: {} },
+      AbortSignal.timeout(IMAGE_TIMEOUT),
+      () => {},
+      () => {},
+    );
+    if (head.statusCode < 200 || head.statusCode >= 300) {
+      throw new Error(`GET ${src} ${head.statusCode}`);
+    }
+    return createImageBitmap(new Blob([bytes]));
+  }
   const response = await fetch(imageUrl(src));
   if (!response.ok) throw new Error(`GET ${src} ${response.status}`);
   return createImageBitmap(await response.blob());
 }
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function adler32(bytes: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  // 5552 bytes is the most that can be summed before the sums must be reduced
+  for (let start = 0; start < bytes.length; start += 5552) {
+    const end = Math.min(bytes.length, start + 5552);
+    for (let i = start; i < end; i++) {
+      a += bytes[i]!;
+      b += a;
+    }
+    a %= 65521;
+    b %= 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+/** Largest length of a stored deflate block. */
+const STORED_BLOCK = 0xffff;
+
+/**
+ * Encodes RGBA pixels, not premultiplied, as a PNG. The image data is in
+ * stored (uncompressed) deflate blocks: encoding stays synchronous and simple,
+ * as `Canvas.toDataURL` needs, at the cost of size.
+ */
+export function encodePng(
+  width: number,
+  height: number,
+  rgba: Uint8Array | Uint8ClampedArray,
+): Uint8Array<ArrayBuffer> {
+  // Each row starts with filter type 0, none
+  const stride = width * 4 + 1;
+  const raw = new Uint8Array(stride * height);
+  for (let y = 0; y < height; y++) {
+    raw.set(rgba.subarray(y * width * 4, (y + 1) * width * 4), y * stride + 1);
+  }
+  const blocks = Math.max(1, Math.ceil(raw.length / STORED_BLOCK));
+  const zlib = new Uint8Array(2 + blocks * 5 + raw.length + 4);
+  const z = new DataView(zlib.buffer);
+  // CMF 0x78 (deflate, 32K window) and FLG 0x01 make a valid zlib header
+  zlib[0] = 0x78;
+  zlib[1] = 0x01;
+  let at = 2;
+  for (let i = 0; i < blocks; i++) {
+    const start = i * STORED_BLOCK;
+    const length = Math.min(STORED_BLOCK, raw.length - start);
+    zlib[at] = i === blocks - 1 ? 1 : 0;
+    z.setUint16(at + 1, length, true);
+    z.setUint16(at + 3, ~length & 0xffff, true);
+    zlib.set(raw.subarray(start, start + length), at + 5);
+    at += 5 + length;
+  }
+  z.setUint32(at, adler32(raw));
+
+  const header = new Uint8Array(13);
+  const h = new DataView(header.buffer);
+  h.setUint32(0, width);
+  h.setUint32(4, height);
+  // 8 bits per channel, color type 6 (RGBA), deflate, adaptive filtering, no interlace
+  header.set([8, 6, 0, 0, 0], 8);
+  const chunks: [string, Uint8Array][] = [
+    ["IHDR", header],
+    ["IDAT", zlib],
+    ["IEND", new Uint8Array(0)],
+  ];
+  const png = new Uint8Array(8 + chunks.reduce((total, [, data]) => total + 12 + data.length, 0));
+  const view = new DataView(png.buffer);
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  let offset = 8;
+  for (const [type, data] of chunks) {
+    view.setUint32(offset, data.length);
+    const typed = new Uint8Array(4 + data.length);
+    typed.set(new TextEncoder().encode(type));
+    typed.set(data, 4);
+    png.set(typed, offset + 4);
+    view.setUint32(offset + 8 + data.length, crc32(typed));
+    offset += 12 + data.length;
+  }
+  return png;
+}
+
+/** Whether `Canvas.toDataURL` said it encodes PNG for another type. */
+let notedPngOnly = false;
 
 /** `Canvas.createImage()`: loads when `src` is set, then calls `onload` or `onerror`. */
 class MiniImage {
@@ -74,6 +187,7 @@ class MiniImage {
 class MiniCanvas {
   readonly offscreen: OffscreenCanvas;
   private context?: unknown;
+  private contextType?: "2d" | "webgl";
   private frameQueued = false;
   private readonly show?: (bitmap: ImageBitmap) => void;
   constructor(width: number, height: number, show?: (bitmap: ImageBitmap) => void) {
@@ -98,6 +212,7 @@ class MiniCanvas {
     if (type !== "2d" && type !== "webgl") return null;
     const real = this.offscreen.getContext(type);
     if (!real) return null;
+    this.contextType = type;
     this.context ??=
       type === "2d" ? wrapContext(real as OffscreenCanvasRenderingContext2D, this) : real;
     return this.context;
@@ -127,12 +242,44 @@ class MiniCanvas {
   cancelAnimationFrame(id: number) {
     clearTimeout(id);
   }
-  toDataURL() {
-    // An OffscreenCanvas only encodes asynchronously; canvasToTempFilePath works
-    console.warn(
-      "[omr] Canvas.toDataURL is not supported in the simulator; use wx.canvasToTempFilePath",
-    );
-    return "data:,";
+  /**
+   * An OffscreenCanvas only encodes asynchronously, so the pixels are read and
+   * encoded here. Only PNG is written: like a browser, another type gives PNG.
+   */
+  toDataURL(type = "image/png") {
+    const { width, height } = this.offscreen;
+    if (width === 0 || height === 0) return "data:,";
+    if (String(type).toLowerCase() !== "image/png" && !notedPngOnly) {
+      notedPngOnly = true;
+      console.info(`[omr] Canvas.toDataURL encodes PNG only in the simulator, not ${type}`);
+    }
+    return `data:image/png;base64,${bytesToBase64(encodePng(width, height, this.pixels()))}`;
+  }
+  /** The picture as RGBA rows from the top, not premultiplied. */
+  private pixels(): Uint8Array | Uint8ClampedArray {
+    const { width, height } = this.offscreen;
+    if (this.contextType === "2d") {
+      return this.offscreen.getContext("2d")!.getImageData(0, 0, width, height).data;
+    }
+    const pixels = new Uint8Array(width * height * 4);
+    if (this.contextType !== "webgl") return pixels;
+    const gl = this.offscreen.getContext("webgl")!;
+    const read = new Uint8Array(pixels.length);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, read);
+    // WebGL rows start at the bottom
+    const row = width * 4;
+    for (let y = 0; y < height; y++) {
+      pixels.set(read.subarray((height - 1 - y) * row, (height - y) * row), y * row);
+    }
+    if (gl.getContextAttributes()?.premultipliedAlpha !== false) {
+      for (let i = 0; i < pixels.length; i += 4) {
+        const alpha = pixels[i + 3]!;
+        if (alpha === 0 || alpha === 255) continue;
+        for (let c = i; c < i + 3; c++)
+          pixels[c] = Math.min(255, Math.round((pixels[c]! * 255) / alpha));
+      }
+    }
+    return pixels;
   }
   /** Sends the picture to the page once the current task has finished drawing. */
   changed() {

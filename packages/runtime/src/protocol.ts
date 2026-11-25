@@ -36,6 +36,18 @@ export interface SimulatorConfig {
     /** The duration in seconds of every audio source; default 10. */
     audioDuration?: number;
   };
+  /** How `<ad>` and `<ad-custom>` load. */
+  ad?: AdConfig;
+}
+
+export interface AdConfig {
+  /**
+   * `fill` (default) shows a mock ad and fires `bindload`; `error` takes no
+   * height and fires `binderror` with `errCode`.
+   */
+  result?: "fill" | "error";
+  /** The `errCode` of `binderror`, one of WeChat's ad error codes 1000 to 1008; default 1004, no suitable ad. */
+  errCode?: number;
 }
 
 export interface Manifest {
@@ -97,6 +109,10 @@ export interface ComponentViewOptions {
   virtualHost?: boolean;
   /** Has `wx://form-field`: a form submits its `value` data under its `name`. */
   formField?: boolean;
+  /** Has `wx://form-field-group`: a form outside the component collects the controls inside it. */
+  formFieldGroup?: boolean;
+  /** Has `wx://form-field-button`: a `form-type` button inside the component reaches a form outside it. */
+  formFieldButton?: boolean;
 }
 
 /** An event binding in a template, as `triggerEvent` finds it on the way up. */
@@ -146,6 +162,14 @@ export type ViewToLogic =
        * one part of a combined open-type such as `getPhoneNumber|agreePrivacyAuthorization`.
        */
       openType?: string;
+      /** The button attributes the open-type reads, such as `send-message-path` for `contact`. */
+      openTypeProps?: Record<string, unknown>;
+      /**
+       * Set for the `input` event of `<input>` and `<textarea>`: a string or
+       * number the handler returns replaces the field's value, which the logic
+       * layer answers with `eventResult`.
+       */
+      replyId?: number;
     }
   /** An `<input type="nickname">` gained or lost focus. */
   | { type: "nickname"; focused: boolean }
@@ -181,6 +205,8 @@ export type ViewToLogic =
   | { type: "reachBottom" }
   /** The attributes of the page's `<navigation-bar>` changed. */
   | { type: "navigationBar"; attributes: Record<string, unknown> }
+  /** A `<video>` of the page entered full screen, or the last one left it. */
+  | { type: "videoFullScreen"; fullScreen: boolean }
   /** The user pulled the page down far enough, or `wx.startPullDownRefresh` started it. */
   | { type: "pullDownRefresh" }
   /** An observed node's intersection ratio crossed a threshold. */
@@ -238,6 +264,8 @@ export type LogicToView =
   | { type: "unobserve"; observerId: number }
   /** A new picture of a `<canvas>`, drawn by the logic layer. */
   | { type: "canvasFrame"; canvasNodeId: number; bitmap: ImageBitmap }
+  /** What an `input` handler returned; `value` replaces the field's value when set. */
+  | { type: "eventResult"; replyId: number; value?: string }
   /** A return while a `<page-container>` is open: the view closes the container. */
   | { type: "closePageContainer" }
   /** The page went to the background (another page covers it, or the app left) or came back. */
@@ -401,7 +429,9 @@ export type LogicToShell =
   | { type: "ui"; callId: number; name: string; args: Record<string, unknown> }
   | { type: "storage"; storage: Record<string, unknown> }
   /** Capabilities the Mini Program is using now; the capsule shows their icons instead of its dots. */
-  | { type: "permissionsInUse"; kinds: PermissionKind[] };
+  | { type: "permissionsInUse"; kinds: PermissionKind[] }
+  /** A page's full-screen `<video>` covers the whole screen: the shell raises its WebView over the chrome, or puts it back. */
+  | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean };
 
 /** Capabilities whose use WeChat shows in the capsule. */
 export type PermissionKind = "camera" | "record" | "location";
