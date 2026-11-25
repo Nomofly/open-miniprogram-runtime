@@ -18,6 +18,9 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# Amp orb portals
+.amp/portals/*
+
 # Editors & OS
 .idea/
 .vscode/*
