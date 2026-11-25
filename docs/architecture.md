@@ -37,7 +37,7 @@ Mini Program project ──► compiler ──► runtime (logic layer, Worker) 
 
 Separating the logic layer and the view layer (Worker plus page) is deliberate: it reproduces WeChat's two-thread model, so timing bugs such as reading the old DOM before the `setData` callback show up as they would on WeChat.
 
-Each page's view layer runs in a sandboxed iframe with an opaque origin, so page code such as WXS cannot reach the simulator shell: the device chrome, other pages and system UI such as consent dialogs. The shell sends the page its compiled bundle and data by message, and the view layer is served as one classic script, since an opaque origin cannot load modules from the simulator without CORS. The logic layer accepts only messages from the shell, so Mini Program code in the same Worker cannot answer a system dialog for the user.
+Each page's view layer runs in a sandboxed iframe with an opaque origin, so page code such as WXS cannot reach the simulator shell: the device chrome, other pages and system UI such as consent dialogs. The shell sends the page its compiled bundle and data by message, and the view layer is served as one classic script, since an opaque origin cannot load modules from the simulator without CORS. The shell and the logic layer talk over a private message port handed to the Worker before Mini Program code runs, so that code cannot post messages as the logic layer or the shell. It still shares the Worker's JavaScript realm, so it could tamper with built-ins the logic layer uses, for example to change the result of a consent dialog; running Mini Program code in a realm of its own would close that gap.
 
 ## Simulated login and authorization
 

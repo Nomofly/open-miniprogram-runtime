@@ -33,17 +33,22 @@ export function parsePath(key: string): (string | number)[] {
 
 type DataNode = Record<string | number, unknown>;
 
-// Path parts are data keys: only own properties are read, and every write defines
+// Path parts are data keys: only own properties are read, and a new key is defined as
 // an own property, so a key such as __proto__ never reaches an object's prototype
 const own = (node: DataNode, part: string | number) =>
   Object.hasOwn(node, part) ? node[part] : undefined;
-const define = (node: DataNode, part: string | number, value: unknown) =>
-  Object.defineProperty(node, part, {
-    value,
-    writable: true,
-    enumerable: true,
-    configurable: true,
-  });
+const define = (node: DataNode, part: string | number, value: unknown) => {
+  // An existing own property, such as an array's length, keeps its attributes
+  if (Object.hasOwn(node, part)) node[part] = value;
+  else {
+    Object.defineProperty(node, part, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+};
 
 /** Sets `value` at a `setData` path, creating missing objects and arrays on the way. */
 export function setPath(target: Record<string, unknown>, key: string, value: unknown): void {

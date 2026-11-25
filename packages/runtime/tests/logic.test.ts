@@ -398,14 +398,17 @@ describe("logic layer", () => {
     const { sent, view } = boot(
       {
         "app.js": APP,
-        "pages/index/index.js": `Page({ onLoad() { this.setData({ "__proto__.polluted": 1, "a.__proto__": 2 }); } });`,
+        "pages/index/index.js": `Page({
+          data: { items: [1, 2] },
+          onLoad() { this.setData({ "__proto__.polluted": 1, "a.__proto__": 2, "items.length": 0 }); },
+        });`,
       },
       { pages: ["pages/index/index"] },
     );
     view(1, { type: "ready" });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(JSON.stringify(toView(sent, "init")[0])).toContain(
-      '"__proto__":{"polluted":1},"a":{"__proto__":2}',
+      '"items":[],"__proto__":{"polluted":1},"a":{"__proto__":2}',
     );
   });
 
