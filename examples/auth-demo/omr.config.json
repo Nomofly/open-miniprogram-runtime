@@ -1,0 +1,12 @@
+{
+  "auth": {
+    "user": {
+      "openid": "o-demo-alice",
+      "unionid": "u-demo-alice",
+      "nickName": "Alice",
+      "phoneNumber": "13912345678"
+    },
+    "authSetting": {}
+  },
+  "storage": {}
+}

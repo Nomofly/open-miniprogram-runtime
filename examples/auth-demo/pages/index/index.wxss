@@ -1,0 +1,29 @@
+.row {
+  margin-top: 24rpx;
+}
+.actions {
+  margin: 48rpx 24rpx;
+}
+.log {
+  margin: 0 32rpx;
+  color: #999;
+  font-size: 22rpx;
+  font-family: monospace;
+}
+.avatar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 128rpx;
+  height: 128rpx;
+  margin: 16rpx 0 0;
+  padding: 0;
+  font-size: 24rpx;
+}
+.avatar {
+  width: 128rpx;
+  height: 128rpx;
+}
+.nickname {
+  margin-top: 8rpx;
+}

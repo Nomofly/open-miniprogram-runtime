@@ -1,0 +1,284 @@
+/**
+ * Native UI drawn by the shell over the page: toasts, modals, action sheets, the
+ * privacy popup, the consent dialogs of authorization and the nickname bar above
+ * the keyboard. Every button has a `data-omr-action` attribute, so automation
+ * can answer dialogs by selector.
+ */
+
+export type UiHandler = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
+type Child = Node | string | undefined | false;
+
+function h(tag: string, props: Record<string, string> = {}, ...children: Child[]): HTMLElement {
+  const el = document.createElement(tag);
+  for (const [name, value] of Object.entries(props)) el.setAttribute(name, value);
+  for (const child of children) if (child) el.append(child);
+  return el;
+}
+
+const text = (value: unknown) => (typeof value === "string" ? value : "");
+
+const SPINNER = `<svg class="omr-spinner" viewBox="0 0 24 24" width="40" height="40"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="42 100" stroke-linecap="round"/></svg>`;
+const TOAST_ICONS: Record<string, string> = {
+  success: `<svg viewBox="0 0 24 24" width="40" height="40"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  error: `<svg viewBox="0 0 24 24" width="40" height="40"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.2" fill="currentColor"/></svg>`,
+  loading: SPINNER,
+};
+
+export function createUi(
+  layer: HTMLElement,
+  resolveAsset: (src: string) => string,
+  appName: string,
+): UiHandler {
+  let toast: HTMLElement | undefined;
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const hideToast = () => {
+    clearTimeout(toastTimer);
+    toast?.remove();
+    toast = undefined;
+  };
+  const showToast = (title: string, icon: string, mask: boolean, duration?: number) => {
+    hideToast();
+    const iconSvg = TOAST_ICONS[icon];
+    const box = h("div", { class: `omr-toast${iconSvg ? "" : " omr-toast-text"}`, role: "alert" });
+    if (iconSvg) box.insertAdjacentHTML("beforeend", iconSvg);
+    box.append(h("div", { class: "omr-toast-title" }, title));
+    toast = h("div", { class: `omr-toast-layer${mask ? " omr-toast-mask" : ""}` }, box);
+    layer.append(toast);
+    if (duration !== undefined) toastTimer = setTimeout(hideToast, duration);
+  };
+
+  /** Shows a dialog; `build` receives `close`, which removes it and resolves with a result. */
+  const dialog = (
+    kind: "center" | "sheet",
+    build: (close: (result: Record<string, unknown>) => void) => HTMLElement,
+  ) =>
+    new Promise<Record<string, unknown>>((resolve) => {
+      const close = (result: Record<string, unknown>) => {
+        root.remove();
+        resolve(result);
+      };
+      const panel = build(close);
+      panel.classList.add(kind === "center" ? "omr-modal" : "omr-sheet");
+      const root = h("div", { class: "omr-dialog-layer" }, h("div", { class: "omr-mask" }), panel);
+      layer.append(root);
+    });
+
+  const button = (label: string, action: string, onClick: () => void, extra = "") => {
+    const el = h(
+      "button",
+      { type: "button", class: `omr-button ${extra}`.trim(), "data-omr-action": action },
+      label,
+    );
+    el.addEventListener("click", onClick);
+    return el;
+  };
+
+  /** The half-screen consent dialog WeChat shows before giving a Mini Program user data. */
+  const consent = (
+    args: Record<string, unknown>,
+    title: string,
+    body: Child,
+    labels: [deny: string, allow: string] = ["拒绝", "允许"],
+  ) =>
+    dialog("sheet", (close) =>
+      h(
+        "div",
+        { class: "omr-consent", "data-omr-dialog": "consent" },
+        h(
+          "div",
+          { class: "omr-consent-app" },
+          h("span", { class: "omr-app-icon" }, (text(args.appName) || appName).slice(0, 1)),
+          h("span", {}, `${text(args.appName) || appName} 申请`),
+        ),
+        h("div", { class: "omr-consent-title" }, title),
+        body,
+        h(
+          "div",
+          { class: "omr-consent-buttons" },
+          button(labels[0], "deny", () => close({ allow: false })),
+          button(labels[1], "allow", () => close({ allow: true }), "omr-primary"),
+        ),
+      ),
+    );
+
+  /** The full-screen privacy guide `wx.openPrivacyContract` opens. */
+  const privacyContract = (contractName: string) =>
+    dialog("sheet", (close) =>
+      h(
+        "div",
+        { class: "omr-contract", "data-omr-dialog": "privacyContract" },
+        h("div", { class: "omr-contract-title" }, contractName),
+        h(
+          "div",
+          { class: "omr-contract-body" },
+          "开发者在小程序管理后台填写的《小程序用户隐私保护指引》显示在这里。模拟器不包含指引正文。",
+        ),
+        button("返回", "close", () => close({}), "omr-contract-close"),
+      ),
+    );
+
+  let closeNicknameBar: ((result: Record<string, unknown>) => void) | undefined;
+  /** The bar above the keyboard of `<input type="nickname">`; it does not take focus from the input. */
+  const nicknameBar = (nickName: string) =>
+    new Promise<Record<string, unknown>>((resolve) => {
+      closeNicknameBar?.({});
+      const choose = button("", "useNickname", () => close({ nickName }), "omr-nickname-option");
+      choose.append(
+        h("span", { class: "omr-nickname-label" }, "用微信昵称"),
+        h("span", { class: "omr-nickname-value" }, nickName),
+      );
+      choose.addEventListener("mousedown", (event) => event.preventDefault());
+      const bar = h(
+        "div",
+        { class: "omr-nickname-bar", "data-omr-dialog": "nicknameKeyboard" },
+        choose,
+      );
+      const close = (result: Record<string, unknown>) => {
+        bar.remove();
+        if (closeNicknameBar === close) closeNicknameBar = undefined;
+        resolve(result);
+      };
+      closeNicknameBar = close;
+      layer.append(bar);
+    });
+
+  const avatar = (src: unknown) =>
+    h("img", { class: "omr-avatar", src: resolveAsset(text(src)), alt: "" });
+
+  return async (name, args) => {
+    switch (name) {
+      case "showToast":
+        showToast(text(args.title), text(args.icon), Boolean(args.mask), Number(args.duration));
+        return {};
+      case "showLoading":
+        showToast(text(args.title), "loading", Boolean(args.mask));
+        return {};
+      case "hideToast":
+      case "hideLoading":
+        hideToast();
+        return {};
+      case "showModal":
+        return dialog("center", (close) => {
+          const input = args.editable
+            ? (h("textarea", {
+                class: "omr-modal-input",
+                placeholder: text(args.placeholderText),
+              }) as HTMLTextAreaElement)
+            : undefined;
+          if (input) input.value = text(args.content);
+          return h(
+            "div",
+            { "data-omr-dialog": "modal" },
+            args.title ? h("div", { class: "omr-modal-title" }, text(args.title)) : undefined,
+            input ??
+              (args.content
+                ? h("div", { class: "omr-modal-content" }, text(args.content))
+                : undefined),
+            h(
+              "div",
+              { class: "omr-modal-buttons" },
+              args.showCancel !== false &&
+                button(text(args.cancelText), "cancel", () =>
+                  close({ confirm: false, cancel: true }),
+                ),
+              button(
+                text(args.confirmText),
+                "confirm",
+                () =>
+                  close({
+                    confirm: true,
+                    cancel: false,
+                    ...(input ? { content: input.value } : {}),
+                  }),
+                "omr-primary",
+              ),
+            ),
+          );
+        });
+      case "showActionSheet":
+        return dialog("sheet", (close) => {
+          const items = Array.isArray(args.itemList) ? args.itemList.map(String) : [];
+          return h(
+            "div",
+            { class: "omr-action-sheet", "data-omr-dialog": "actionSheet" },
+            args.alertText
+              ? h("div", { class: "omr-action-alert" }, text(args.alertText))
+              : undefined,
+            ...items.map((item, index) =>
+              button(item, `item-${index}`, () => close({ tapIndex: index })),
+            ),
+            h("div", { class: "omr-action-gap" }),
+            button("取消", "cancel", () => close({})),
+          );
+        });
+      case "authorize":
+        return consent(args, text(args.description), undefined);
+      case "privacy": {
+        const app = text(args.appName) || appName;
+        const contractName = text(args.contractName);
+        const link = h(
+          "span",
+          { class: "omr-link", "data-omr-action": "openContract" },
+          contractName,
+        );
+        link.addEventListener("click", () => void privacyContract(contractName));
+        return consent(
+          args,
+          "用户隐私保护提示",
+          h(
+            "div",
+            { class: "omr-consent-body omr-consent-desc" },
+            `感谢你使用${app}。在使用前，请仔细阅读`,
+            link,
+            `。如你同意该指引，请点击“同意”开始使用。`,
+          ),
+          ["拒绝", "同意"],
+        );
+      }
+      case "privacyContract":
+        return privacyContract(text(args.contractName));
+      case "nicknameKeyboard":
+        return nicknameBar(text(args.nickName));
+      case "hideNicknameKeyboard":
+        closeNicknameBar?.({});
+        return {};
+      case "phoneNumber":
+        return consent(
+          args,
+          "申请获取并验证你的手机号",
+          h(
+            "div",
+            { class: "omr-consent-body omr-consent-row" },
+            h("span", { class: "omr-phone" }, text(args.phoneNumber)),
+            h("span", { class: "omr-consent-note" }, "微信绑定号码"),
+          ),
+          ["不允许", "允许"],
+        );
+      case "chooseAvatar":
+        return dialog("sheet", (close) => {
+          const useAvatar = button(
+            "使用微信头像",
+            "allow",
+            () => close({ allow: true }),
+            "omr-avatar-option",
+          );
+          useAvatar.prepend(avatar(args.avatarUrl));
+          return h(
+            "div",
+            { class: "omr-action-sheet", "data-omr-dialog": "chooseAvatar" },
+            useAvatar,
+            h("div", { class: "omr-action-gap" }),
+            button("取消", "deny", () => close({ allow: false })),
+          );
+        });
+      default:
+        console.warn(`[omr] the simulator does not show "${name}"`);
+        return {};
+    }
+  };
+}

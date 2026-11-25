@@ -1,0 +1,30 @@
+<view class="section">
+  <user-card nick-name="{{session ? (session.nickName || '微信用户') : ''}}" avatar="{{session.avatarUrl}}" openid="{{session.openid}}">
+    <text class="label" slot="hint">{{session ? '已登录' : '未登录，点击下方按钮登录'}}</text>
+  </user-card>
+</view>
+
+<view class="section" wx:if="{{session}}">
+  <view class="label">头像</view>
+  <button class="avatar-button" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+    <image wx:if="{{session.avatarUrl}}" class="avatar" src="{{session.avatarUrl}}" />
+    <text wx:else>选择头像</text>
+  </button>
+  <view class="label row">昵称</view>
+  <input class="value nickname" type="nickname" value="{{session.nickName}}" placeholder="请输入昵称" bindinput="onNickname" bindblur="onNickname" bindnicknamereview="onNicknameReview" />
+  <view class="label row">openid</view>
+  <view class="value">{{session.openid}}</view>
+  <view class="label row">unionid</view>
+  <view class="value">{{session.unionid || '—'}}</view>
+  <view class="label row">手机号</view>
+  <view class="value">{{phone || '未绑定'}}</view>
+</view>
+
+<view class="actions">
+  <button wx:if="{{!session}}" type="primary" loading="{{loading}}" bindtap="login">微信一键登录</button>
+  <block wx:else>
+    <button type="primary" open-type="getPhoneNumber" bindgetphonenumber="onPhone">绑定手机号</button>
+    <button bindtap="logout">退出登录</button>
+  </block>
+</view>
+<view class="log" wx:for="{{logs}}" wx:key="*this">{{item}}</view>

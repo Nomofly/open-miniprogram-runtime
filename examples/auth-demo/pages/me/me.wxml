@@ -1,0 +1,26 @@
+<view class="section">
+  <view class="label">权限设置</view>
+  <view class="value" wx:for="{{scopes}}" wx:key="name">{{item.name}}：{{item.granted ? '允许' : '拒绝'}}</view>
+  <view class="value" wx:if="{{!scopes.length}}">尚未授权任何权限</view>
+</view>
+<view class="section" wx:if="{{location || record || cameraState}}">
+  <block wx:if="{{location}}">
+    <view class="label">当前位置{{tracking ? '（持续定位中）' : ''}}</view>
+    <view class="value">{{location.latitude}}, {{location.longitude}}</view>
+  </block>
+  <block wx:if="{{record}}">
+    <view class="label row">录音</view>
+    <view class="value">{{record}}</view>
+  </block>
+  <block wx:if="{{cameraState}}">
+    <view class="label row">摄像头</view>
+    <view class="value">{{cameraState}}</view>
+  </block>
+</view>
+<camera wx:if="{{camera}}" class="camera" bindinitdone="onCameraReady" binderror="onCameraError" />
+<view class="actions">
+  <button type="primary" bindtap="locate">获取位置</button>
+  <button bindtap="toggleTracking">{{tracking ? '停止持续定位' : '开始持续定位'}}</button>
+  <button bindtap="toggleRecording">{{recording ? '停止录音' : '开始录音'}}</button>
+  <button bindtap="toggleCamera">{{camera ? '关闭摄像头' : '打开摄像头'}}</button>
+</view>
