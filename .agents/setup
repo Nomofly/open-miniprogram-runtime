@@ -14,7 +14,7 @@ step() {
 }
 
 install_vp() {
-  if [ -x "$HOME/.local/share/vite-plus/bin/vp" ]; then
+  if [ -x "$HOME/.local/share/vite-plus/bin/vp" ] && [ -f "$HOME/.config/vite-plus/env" ]; then
     echo "    Vite+ is already installed"
     return
   fi
