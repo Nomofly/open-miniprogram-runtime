@@ -5,6 +5,7 @@ export default defineConfig({
     dts: {
       generator: "tsgo",
     },
-    exports: true,
+    // Workspace packages and tests use the sources; the published package uses dist
+    exports: { devExports: true },
   },
 });

@@ -1,0 +1,12 @@
+.actions {
+  margin: 48rpx 24rpx;
+}
+.actions button + button {
+  margin-top: 24rpx;
+}
+.row {
+  margin-top: 24rpx;
+}
+.camera {
+  height: 360rpx;
+}

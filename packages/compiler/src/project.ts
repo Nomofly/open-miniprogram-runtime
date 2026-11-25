@@ -18,6 +18,12 @@ export interface AppJson {
 }
 
 export interface MiniProgramProject {
+  /** Absolute path of the project directory, which holds project.config.json when there is one. */
+  dir: string;
+  /** `appid` from project.config.json, or `touristappid` when it is not set. */
+  appid: string;
+  /** `projectname` from project.config.json, or the directory name. */
+  name: string;
   /** Absolute path of the Mini Program root, the directory that contains app.json. */
   root: string;
   appJson: AppJson;
@@ -54,6 +60,12 @@ export async function loadProject(dir: string): Promise<MiniProgramProject> {
   ];
 
   return {
+    dir: path.resolve(dir),
+    appid: typeof projectConfig?.appid === "string" ? projectConfig.appid : "touristappid",
+    name:
+      typeof projectConfig?.projectname === "string"
+        ? decodeURIComponent(projectConfig.projectname)
+        : path.basename(path.resolve(dir)),
     root,
     appJson,
     pages,
@@ -61,7 +73,7 @@ export async function loadProject(dir: string): Promise<MiniProgramProject> {
   };
 }
 
-async function readJson(file: string): Promise<Record<string, unknown> | undefined> {
+export async function readJson(file: string): Promise<Record<string, unknown> | undefined> {
   let text: string;
   try {
     text = await readFile(file, "utf8");

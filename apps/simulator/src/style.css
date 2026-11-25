@@ -1,0 +1,547 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #e9e9ec;
+}
+body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC",
+    "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+/* Headless screenshots use ?frame=0 to capture the device alone */
+html[data-frame="0"] body {
+  padding: 0;
+  background: #fff;
+}
+
+#omr-device {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  border-radius: 24px;
+  font-size: 16px;
+  color: #000;
+}
+html[data-frame="0"] #omr-device {
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.omr-fatal {
+  padding: 24px;
+  color: #c00;
+  font:
+    13px/1.5 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+}
+
+.omr-pages,
+.omr-page {
+  position: absolute;
+  inset: 0;
+}
+.omr-page {
+  visibility: hidden;
+}
+.omr-page-active {
+  visibility: visible;
+}
+.omr-webview {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.omr-statusbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  box-sizing: border-box;
+  font-size: 15px;
+  font-weight: 600;
+  color: #000;
+  pointer-events: none;
+}
+#omr-device.omr-chrome-dark .omr-statusbar {
+  color: #fff;
+}
+.omr-status-icons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  fill: currentColor;
+}
+
+.omr-navbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+.omr-navbar[hidden] {
+  display: none;
+}
+.omr-title {
+  max-width: 50%;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.omr-back {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.omr-back[hidden] {
+  display: none;
+}
+
+/* The capsule is above everything, including toasts, modals and consent dialogs */
+.omr-capsule {
+  position: absolute;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #000;
+}
+#omr-device.omr-chrome-dark .omr-capsule {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.15);
+  color: #fff;
+}
+.omr-capsule-menu,
+.omr-capsule-close {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.omr-capsule-menu {
+  gap: 3px;
+}
+.omr-capsule-menu i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.omr-capsule-menu i:nth-child(2) {
+  width: 7px;
+  height: 7px;
+}
+/* In-use icons fade between dark and light, like WeChat's */
+.omr-in-use {
+  flex: none;
+  animation: omr-in-use-pulse 1.6s ease-in-out infinite;
+}
+@keyframes omr-in-use-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+.omr-capsule-divider {
+  width: 0.5px;
+  height: 18px;
+  background: currentColor;
+  opacity: 0.2;
+}
+.omr-capsule-close::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2.5px transparent;
+  background: radial-gradient(circle, currentColor 2.5px, transparent 3px);
+}
+
+.omr-tabbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  box-sizing: border-box;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.33);
+}
+.omr-tabbar[hidden] {
+  display: none;
+}
+.omr-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.omr-tab-icon {
+  width: 24px;
+  height: 24px;
+}
+.omr-tab-text {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* Native UI over the page */
+.omr-ui-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+.omr-ui-layer > * {
+  pointer-events: auto;
+}
+.omr-toast-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.omr-toast-layer.omr-toast-mask {
+  pointer-events: auto;
+}
+.omr-toast {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 136px;
+  min-height: 136px;
+  padding: 16px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  text-align: center;
+}
+.omr-toast.omr-toast-text {
+  width: auto;
+  max-width: 70%;
+  min-height: 0;
+  padding: 12px 18px;
+}
+.omr-toast-title {
+  font-size: 15px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.omr-spinner {
+  animation: omr-spin 1s linear infinite;
+}
+@keyframes omr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.omr-dialog-layer {
+  position: absolute;
+  inset: 0;
+}
+.omr-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+.omr-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.omr-modal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 320px;
+  max-width: 80%;
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+  text-align: center;
+}
+.omr-modal-title {
+  padding: 32px 24px 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.omr-modal-content {
+  padding: 16px 24px 32px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 17px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.omr-modal-title + .omr-modal-buttons {
+  margin-top: 32px;
+}
+.omr-modal-input {
+  display: block;
+  width: calc(100% - 48px);
+  min-height: 60px;
+  margin: 16px 24px 32px;
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  font: inherit;
+}
+.omr-modal-buttons {
+  display: flex;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-modal-buttons .omr-button {
+  flex: 1;
+  line-height: 56px;
+  font-size: 17px;
+  font-weight: 700;
+}
+.omr-modal-buttons .omr-button + .omr-button {
+  border-left: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-modal-buttons .omr-primary {
+  color: #576b95;
+}
+
+.omr-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  border-radius: 12px 12px 0 0;
+  background: #fff;
+}
+.omr-action-sheet {
+  background: #f7f7f7;
+  text-align: center;
+}
+.omr-action-sheet > .omr-button,
+.omr-action-alert {
+  background: #fff;
+  line-height: 56px;
+  font-size: 17px;
+}
+.omr-action-sheet > .omr-button + .omr-button {
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-action-alert {
+  line-height: 1.4;
+  padding: 16px 24px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-action-gap {
+  height: 8px;
+}
+.omr-action-sheet > .omr-button:last-child {
+  padding-bottom: 34px;
+}
+.omr-avatar-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.omr-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.omr-consent {
+  padding: 24px 24px 50px;
+}
+.omr-consent-app {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.omr-app-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #07c160;
+  color: #fff;
+  font-size: 13px;
+}
+.omr-consent-title {
+  margin-top: 16px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.omr-consent-body {
+  margin-top: 16px;
+  padding: 16px 0;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-consent-desc {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 15px;
+}
+.omr-consent-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.omr-phone {
+  font-size: 17px;
+}
+.omr-consent-note {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+}
+.omr-consent-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 32px;
+}
+.omr-consent-buttons .omr-button {
+  width: 120px;
+  padding: 10px 0;
+  border-radius: 8px;
+  background: #f2f2f2;
+  color: #07c160;
+  font-size: 17px;
+  font-weight: 600;
+}
+.omr-consent-buttons .omr-primary {
+  background: #07c160;
+  color: #fff;
+}
+
+.omr-link {
+  color: #576b95;
+  cursor: pointer;
+}
+.omr-contract {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 56px 24px 34px;
+  box-sizing: border-box;
+}
+.omr-sheet.omr-contract {
+  top: 0;
+  border-radius: 0;
+}
+.omr-contract-title {
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+}
+.omr-contract-body {
+  flex: 1;
+  margin-top: 24px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.omr-contract-close {
+  padding: 10px 0;
+  border-radius: 8px;
+  background: #f2f2f2;
+  color: #07c160;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* The bar WeChat shows above the keyboard of <input type="nickname">: a full-width card, label over nickname */
+.omr-nickname-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 8px 34px;
+  background: #e5e5e5;
+}
+.omr-nickname-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  height: 46px;
+  border-radius: 8px;
+  background: #f2f2f2;
+}
+.omr-nickname-label {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  line-height: 18px;
+}
+.omr-nickname-value {
+  color: #000;
+  font-size: 14px;
+  line-height: 18px;
+}

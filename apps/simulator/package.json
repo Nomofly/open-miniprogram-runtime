@@ -1,0 +1,28 @@
+{
+  "name": "@omr/simulator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Mini Program simulator of open-miniprogram-runtime: device chrome, page stack and routing around the logic and view layers.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nomofly/open-miniprogram-runtime.git",
+    "directory": "apps/simulator"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@omr/compiler": "workspace:*",
+    "@omr/renderer": "workspace:*",
+    "@omr/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

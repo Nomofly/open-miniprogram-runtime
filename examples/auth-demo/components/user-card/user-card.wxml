@@ -1,0 +1,7 @@
+<view class="card">
+  <image class="avatar" src="{{avatar || defaultAvatar}}" mode="aspectFill" />
+  <view class="info">
+    <view class="name">{{nickName || '未登录'}}</view>
+    <slot name="hint" />
+  </view>
+</view>

@@ -1,0 +1,4 @@
+{
+  "navigationBarTitleText": "微信登录",
+  "usingComponents": { "user-card": "/components/user-card/user-card" }
+}
