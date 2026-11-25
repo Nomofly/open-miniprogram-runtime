@@ -21,6 +21,21 @@ export interface Definition {
   observers: { fields: string[]; fn: AnyFunction }[];
   externalClasses: string[];
   options: Record<string, unknown>;
+  /** Every behavior merged in, nested ones included: `Behavior()` objects and built-in names such as `wx://form-field`. */
+  behaviors: Set<unknown>;
+  /** `relations`, by the key written in the definition. */
+  relations: Record<string, RelationDefinition>;
+  /** The `export` definition field, which `selectComponent` returns with `wx://component-export`. */
+  export?: AnyFunction;
+}
+
+export interface RelationDefinition {
+  type: "parent" | "child" | "ancestor" | "descendant";
+  /** A `Behavior()` the related component must have, instead of the path written as the key. */
+  target?: unknown;
+  linked?: AnyFunction;
+  linkChanged?: AnyFunction;
+  unlinked?: AnyFunction;
 }
 
 const COMPONENT_LIFETIMES = ["created", "attached", "ready", "moved", "detached", "error"];
@@ -29,8 +44,52 @@ const COMPONENT_LIFETIMES = ["created", "attached", "ready", "moved", "detached"
 const BEHAVIOR = Symbol("omr.behavior");
 
 export function defineBehavior(options: Record<string, unknown>): Record<string, unknown> {
-  return Object.assign(Object.create(null), options, { [BEHAVIOR]: true });
+  const behavior = Object.assign(Object.create(null), options, { [BEHAVIOR]: true });
+  runDefinitionFilters(behavior);
+  return behavior;
 }
+
+/**
+ * Calls the `definitionFilter` of each behavior a definition uses with the
+ * definition's fields, which it may change, and the filters of that
+ * behavior's own behaviors, which it may call in turn.
+ */
+function runDefinitionFilters(options: Record<string, unknown>): void {
+  for (const behavior of behaviorsOf(options)) {
+    if (typeof behavior !== "object" || typeof behavior.definitionFilter !== "function") continue;
+    (behavior.definitionFilter as AnyFunction)(options, nestedFilters(behavior));
+  }
+}
+
+function nestedFilters(behavior: Record<string, unknown>): AnyFunction[] {
+  return behaviorsOf(behavior).flatMap((nested) =>
+    typeof nested === "object" && typeof nested.definitionFilter === "function"
+      ? [
+          (fields: unknown) =>
+            (nested.definitionFilter as AnyFunction)(fields, nestedFilters(nested)),
+        ]
+      : [],
+  );
+}
+
+const behaviorsOf = (options: Record<string, unknown>): (Record<string, unknown> | string)[] =>
+  Array.isArray(options.behaviors)
+    ? options.behaviors.filter(
+        (behavior): behavior is Record<string, unknown> | string =>
+          typeof behavior === "string" || (!!behavior && typeof behavior === "object"),
+      )
+    : [];
+
+/** What the built-in behaviors add to a component. */
+const BUILTIN_BEHAVIORS: Record<string, Record<string, unknown>> = {
+  // A form collects the `value` of a component with this behavior under its `name`
+  "wx://form-field": { properties: { name: String, value: null } },
+  // The view does not scope forms by component, so these need nothing more
+  "wx://form-field-group": {},
+  "wx://form-field-button": {},
+  // Makes `selectComponent` return what `export` returns
+  "wx://component-export": {},
+};
 
 /** Normalizes the object passed to `Page()`. */
 export function normalizePage(options: Record<string, unknown>): Definition {
@@ -46,6 +105,7 @@ export function normalizePage(options: Record<string, unknown>): Definition {
 /** Normalizes the object passed to `Component()`, merging its behaviors. */
 export function normalizeComponent(options: Record<string, unknown>): Definition {
   const definition = emptyDefinition("component");
+  runDefinitionFilters(options);
   mergeComponent(definition, options);
   return definition;
 }
@@ -62,16 +122,23 @@ function emptyDefinition(kind: Definition["kind"]): Definition {
     observers: [],
     externalClasses: [],
     options: {},
+    behaviors: new Set(),
+    relations: {},
   };
 }
 
 function mergeComponent(definition: Definition, options: Record<string, unknown>): void {
   // Behaviors first, so the component's own fields override theirs
-  for (const behavior of (options.behaviors as unknown[] | undefined) ?? []) {
+  for (const behavior of behaviorsOf(options)) {
     // Built-in behaviors such as "wx://form-field" are strings
-    if (behavior && typeof behavior === "object") {
-      mergeComponent(definition, behavior as Record<string, unknown>);
+    if (typeof behavior === "string") {
+      const builtin = BUILTIN_BEHAVIORS[behavior];
+      if (!builtin) console.warn(`[omr] unknown built-in behavior "${behavior}"`);
+      else mergeComponent(definition, builtin);
+    } else {
+      mergeComponent(definition, behavior);
     }
+    definition.behaviors.add(behavior);
   }
   Object.assign(definition.data, options.data as Record<string, unknown> | undefined);
   for (const [name, spec] of Object.entries(
@@ -100,6 +167,12 @@ function mergeComponent(definition: Definition, options: Record<string, unknown>
   definition.externalClasses.push(...((options.externalClasses as string[] | undefined) ?? []));
   Object.assign(definition.options, options.options as Record<string, unknown> | undefined);
   if (options.addGlobalClass === true) definition.options.addGlobalClass = true;
+  for (const [key, relation] of Object.entries(
+    (options.relations as Record<string, RelationDefinition> | undefined) ?? {},
+  )) {
+    if (relation && typeof relation === "object") definition.relations[key] = relation;
+  }
+  if (typeof options.export === "function") definition.export = options.export as AnyFunction;
 }
 
 function normalizeProperty(spec: unknown): PropertyDefinition {

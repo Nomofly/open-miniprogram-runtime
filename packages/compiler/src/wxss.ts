@@ -29,14 +29,18 @@ export async function compileWxss(
   return compileFile(root, file, options, new Set());
 }
 
+/**
+ * `ancestors` are the files whose `@import`s led to this one. Only an import of
+ * an ancestor is skipped: a file imported again elsewhere is inlined again, so
+ * its rules keep their place in the cascade.
+ */
 async function compileFile(
   root: string,
   file: string,
   options: WxssOptions,
-  seen: Set<string>,
+  ancestors: Set<string>,
 ): Promise<string> {
-  if (seen.has(file)) return "";
-  seen.add(file);
+  if (ancestors.has(file)) return "";
   let source: string;
   try {
     source = await readFile(path.join(root, file), "utf8");
@@ -50,6 +54,8 @@ async function compileFile(
   ast.walkAtRules("import", (rule) => {
     imports.push(rule);
   });
+  // Before inlining the imports, whose selectors are already transformed
+  transformSelectors(ast, options);
   for (const rule of imports) {
     const target = rule.params
       .trim()
@@ -62,12 +68,10 @@ async function compileFile(
       root,
       resolved.endsWith(".wxss") ? resolved : `${resolved}.wxss`,
       options,
-      seen,
+      new Set([...ancestors, file]),
     );
     rule.replaceWith(postcss.parse(css));
   }
-
-  transformSelectors(ast, options);
   return ast.toString();
 }
 

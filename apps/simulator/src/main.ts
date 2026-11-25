@@ -4,12 +4,14 @@
  * WebView, and relays messages between them.
  */
 import type { WebviewBundle } from "@omr/compiler";
+import { fsFileUrl, isFsPath, themeTabBar, themeWindow } from "@omr/runtime";
 import type {
   LogicToShell,
   Manifest,
   PermissionKind,
   ShellToLogic,
   StackEntry,
+  Theme,
   ViewToLogic,
 } from "@omr/runtime";
 import { DEFAULT_DEVICE, DEVICES, TAB_BAR_HEIGHT, menuButtonRect, systemInfo } from "./device.ts";
@@ -22,6 +24,8 @@ interface TabBarConfig {
   selectedColor?: string;
   backgroundColor?: string;
   borderStyle?: string;
+  /** Each tab page draws the `custom-tab-bar` component instead. */
+  custom?: boolean;
   list?: { pagePath: string; text?: string; iconPath?: string; selectedIconPath?: string }[];
 }
 
@@ -32,8 +36,14 @@ interface PageView {
   navbar: HTMLElement;
   title: HTMLElement;
   back: HTMLElement;
-  /** The page's window configuration, with changes from `wx.setNavigationBar*`. */
+  home: HTMLElement;
+  loading: HTMLElement;
+  /** Whether `wx.hideHomeButton` hid the home button. */
+  homeHidden: boolean;
+  /** The page's window configuration in the current theme, with `changes` over it. */
   window: Record<string, unknown>;
+  /** What `wx.setNavigationBar*` changed, which a theme change keeps. */
+  changes: Record<string, unknown>;
 }
 
 const FILES = "/__omr/files/";
@@ -48,9 +58,15 @@ const root = document.getElementById("omr-device")!;
 root.style.width = `${device.screenWidth}px`;
 root.style.height = `${device.screenHeight}px`;
 root.dataset.device = deviceName;
+// Full-screen system pages start below the status bar
+root.style.setProperty("--omr-status-bar", `${device.statusBarHeight}px`);
 
 const resolveAsset = (src: string) =>
-  /^([a-z][\w+.-]*:|\/\/)/i.test(src) ? src : FILES + src.replace(/^\/+/, "");
+  isFsPath(src)
+    ? fsFileUrl(src)
+    : /^([a-z][\w+.-]*:|\/\/)/i.test(src)
+      ? src
+      : FILES + src.replace(/^\/+/, "");
 
 async function fetchOk(url: string): Promise<Response> {
   const response = await fetch(url);
@@ -81,8 +97,29 @@ try {
 }
 
 const styleV2 = manifest.appJson.style === "v2";
-const tabBar = manifest.appJson.tabBar as TabBarConfig | undefined;
+const darkmode = manifest.appJson.darkmode === true;
+/** The system theme: `?theme=dark`, else light, so screenshots do not depend on the host. */
+let theme: Theme = params.get("theme") === "dark" ? "dark" : "light";
+/** A page's window configuration with the theme's variables resolved. */
+const themedWindow = (route: string) =>
+  themeWindow(manifest.windows[route] ?? {}, manifest.themeVariables, theme);
+const tabBarConfig = manifest.appJson.tabBar as TabBarConfig | undefined;
+/** What wx.setTabBarStyle and wx.setTabBarItem changed, which a theme change keeps. */
+const tabBarChanges: Record<string, string> = {};
+const tabItemChanges = new Map<number, Record<string, string>>();
+const themedTabBar = (): TabBarConfig | undefined => {
+  if (!tabBarConfig) return undefined;
+  const result = { ...themeTabBar(tabBarConfig, manifest.themeVariables, theme), ...tabBarChanges };
+  result.list = result.list?.map((item, index) => ({ ...item, ...tabItemChanges.get(index) }));
+  return result;
+};
+let tabBar = themedTabBar();
 const tabRoutes = (tabBar?.list ?? []).map((item) => item.pagePath.replace(/^\/+/, ""));
+/** Badge text, or "" for a red dot, by tab index. */
+const tabBadges = new Map<number, string>();
+let tabBarHidden = false;
+/** The page the home button opens: the app's first page. */
+const homeRoute = manifest.pages[0] ?? manifest.entryPage;
 
 const pagesLayer = el("div", "omr-pages");
 const statusBar = el("div", "omr-statusbar");
@@ -96,8 +133,11 @@ Object.assign(capsule.style, {
   height: `${menuButton.height}px`,
 });
 const CAPSULE_DOTS = "<i></i><i></i><i></i>";
-capsule.innerHTML = `<span class="omr-capsule-menu">${CAPSULE_DOTS}</span><span class="omr-capsule-divider"></span><span class="omr-capsule-close"></span>`;
+capsule.innerHTML = `<span class="omr-capsule-menu">${CAPSULE_DOTS}</span><span class="omr-capsule-divider"></span><span class="omr-capsule-close" data-omr-action="appHide"></span>`;
 const capsuleMenu = capsule.querySelector<HTMLElement>(".omr-capsule-menu")!;
+capsuleMenu.addEventListener("click", () => toLogic({ type: "menu" }));
+// The close button leaves the Mini Program, which keeps running in the background
+capsule.querySelector(".omr-capsule-close")!.addEventListener("click", () => appHide());
 /** What the capsule's menu button shows instead of its dots while a capability is in use. */
 const IN_USE_ICONS: Record<PermissionKind, string> = {
   location: `<path d="M20 4L4 11l7 2 2 7z" fill="currentColor"/>`,
@@ -120,7 +160,25 @@ const tabBarEl = el("div", "omr-tabbar");
 tabBarEl.style.height = `${TAB_BAR_HEIGHT + device.safeAreaBottom}px`;
 tabBarEl.style.paddingBottom = `${device.safeAreaBottom}px`;
 const uiLayer = el("div", "omr-ui-layer");
-root.append(pagesLayer, statusBar, capsule, tabBarEl, uiLayer);
+// What the user sees after leaving: WeChat's recent Mini Programs, where tapping this one comes back
+const backgroundScreen = el("div", "omr-background");
+backgroundScreen.hidden = true;
+backgroundScreen.style.paddingTop = `${device.statusBarHeight}px`;
+const recent = el("button", "omr-recent");
+recent.setAttribute("type", "button");
+recent.dataset.omrAction = "appShow";
+recent.append(
+  el("span", "omr-recent-icon", manifest.appName.slice(0, 1)),
+  el("span", "omr-recent-name", manifest.appName),
+);
+// Scene 1089: the recent list above WeChat's chats
+recent.addEventListener("click", () => appShow(1089));
+backgroundScreen.append(
+  el("div", "omr-background-title", "微信"),
+  el("div", "omr-background-label", "最近使用的小程序"),
+  recent,
+);
+root.append(pagesLayer, backgroundScreen, statusBar, capsule, tabBarEl, uiLayer);
 
 const ui = createUi(uiLayer, resolveAsset, manifest.appName);
 const pages = new Map<number, PageView>();
@@ -143,7 +201,9 @@ function applyWindow(page: PageView): void {
   page.navbar.style.color = win.navigationBarTextStyle === "black" ? "#000000" : "#ffffff";
   page.title.textContent = str(win.navigationBarTitleText, "");
   const top = custom ? 0 : navHeight;
-  const bottom = isTab ? TAB_BAR_HEIGHT + device.safeAreaBottom : 0;
+  // A custom tab bar is drawn by the page itself, over the bottom of its window
+  const bottom =
+    isTab && !tabBarHidden && !tabBar?.custom ? TAB_BAR_HEIGHT + device.safeAreaBottom : 0;
   // An iframe does not stretch between top and bottom, so give it its height
   page.iframe.style.top = `${top}px`;
   page.iframe.style.height = `${device.screenHeight - top - bottom}px`;
@@ -161,13 +221,25 @@ function createPage(entry: StackEntry): PageView {
   back.setAttribute("aria-label", "back");
   back.innerHTML = `<svg viewBox="0 0 12 24" width="12" height="24"><path d="M10 3L2 12l8 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   back.addEventListener("click", () => toLogic({ type: "navigateBack" }));
+  const home = el("button", "omr-home");
+  home.setAttribute("type", "button");
+  home.setAttribute("aria-label", "home");
+  home.hidden = true;
+  home.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 11l8-7 8 7M6.5 9v10h11V9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  home.addEventListener("click", () => toLogic({ type: "reLaunch", url: `/${homeRoute}` }));
   const title = el("div", "omr-title");
-  navbar.append(back, title);
+  const loading = el("span", "omr-nav-loading");
+  loading.hidden = true;
+  const heading = el("div", "omr-heading");
+  heading.append(loading, title);
+  navbar.append(back, home, heading);
   const iframe = document.createElement("iframe");
   iframe.className = "omr-webview";
   iframe.title = entry.route;
   // Without allow-same-origin the page gets an opaque origin: it cannot touch this document
   iframe.setAttribute("sandbox", "allow-scripts");
+  // The page's prefers-color-scheme media queries follow the iframe's color-scheme
+  iframe.style.colorScheme = theme;
   iframe.src = "/__omr/webview.html";
   const loaded = new Promise((resolve) => iframe.addEventListener("load", resolve, { once: true }));
   void Promise.all([fetchOk(`/__omr/page.json?route=${encodeURIComponent(entry.route)}`), loaded])
@@ -180,7 +252,10 @@ function createPage(entry: StackEntry): PageView {
         windowWidth: device.screenWidth,
         hairline: device.platform === "ios" && device.pixelRatio > 1 ? 0.5 : 1,
         styleV2,
+        dark: darkmode && theme === "dark",
       };
+      // The view paints the window background behind pull-down refresh in this theme
+      bundle.window = themeWindow(bundle.window, manifest.themeVariables, theme);
       // An opaque origin cannot be named as the target, so "*"; the target is this iframe only
       iframe.contentWindow?.postMessage(init, "*");
     })
@@ -194,7 +269,11 @@ function createPage(entry: StackEntry): PageView {
     navbar,
     title,
     back,
-    window: { ...manifest.windows[entry.route] },
+    home,
+    loading,
+    homeHidden: false,
+    window: themedWindow(entry.route),
+    changes: {},
   };
   applyWindow(page);
   pages.set(entry.webviewId, page);
@@ -204,7 +283,7 @@ function createPage(entry: StackEntry): PageView {
 function renderTabBar(route: string): void {
   const items = tabBar?.list ?? [];
   const active = tabRoutes.indexOf(route);
-  tabBarEl.hidden = active === -1;
+  tabBarEl.hidden = active === -1 || tabBarHidden || tabBar?.custom === true;
   if (active === -1) return;
   tabBarEl.style.background = tabBar?.backgroundColor ?? "#ffffff";
   tabBarEl.style.borderTopColor =
@@ -227,6 +306,10 @@ function renderTabBar(route: string): void {
         button.append(img);
       }
       button.append(el("span", "omr-tab-text", item.text ?? ""));
+      const badge = tabBadges.get(index);
+      if (badge !== undefined) {
+        button.append(el("span", badge ? "omr-tab-badge" : "omr-tab-dot", badge || undefined));
+      }
       button.addEventListener("click", () => toLogic({ type: "switchTab", url: item.pagePath }));
       return button;
     }),
@@ -247,7 +330,14 @@ function onRoute(message: Extract<LogicToShell, { type: "route" }>): void {
   if (!top) return;
   stack.forEach((entry, index) => {
     const page = pages.get(entry.webviewId);
-    if (page) page.back.hidden = index === 0;
+    if (!page) return;
+    page.back.hidden = index === 0;
+    // A first page other than the home page or a tab offers the way home, as WeChat does
+    page.home.hidden =
+      index !== 0 ||
+      page.homeHidden ||
+      entry.route === homeRoute ||
+      tabRoutes.includes(entry.route);
   });
   for (const [id, page] of pages) page.el.classList.toggle("omr-page-active", id === top.webviewId);
   const topPage = pages.get(top.webviewId)!;
@@ -265,14 +355,18 @@ async function onUi(message: Extract<LogicToShell, { type: "ui" }>): Promise<voi
       if (page) {
         const { args } = message;
         if (message.name === "setNavigationBarTitle")
-          page.window.navigationBarTitleText = args.title;
+          page.changes.navigationBarTitleText = args.title;
         else {
-          page.window.navigationBarBackgroundColor = args.backgroundColor;
-          page.window.navigationBarTextStyle = args.frontColor === "#ffffff" ? "white" : "black";
+          page.changes.navigationBarBackgroundColor = args.backgroundColor;
+          page.changes.navigationBarTextStyle = args.frontColor === "#ffffff" ? "white" : "black";
         }
+        page.window = { ...themedWindow(page.entry.route), ...page.changes };
         applyWindow(page);
         if (stack[stack.length - 1]?.webviewId === page.entry.webviewId) onRoute(lastRoute!);
       }
+    } else if (message.name in CHROME_APIS) {
+      CHROME_APIS[message.name]!(message.args, pages.get(Number(message.args.webviewId)));
+      if (lastRoute) onRoute(lastRoute);
     } else {
       result = await ui(message.name, message.args);
     }
@@ -281,6 +375,60 @@ async function onUi(message: Extract<LogicToShell, { type: "ui" }>): Promise<voi
     toLogic({ type: "uiResult", callId: message.callId, error: (error as Error).message });
   }
 }
+
+/** The index of a tab bar item an API names; throws WeChat's failure when there is none. */
+function tabIndex(args: Record<string, unknown>, page: PageView | undefined): number {
+  if (!page || !tabRoutes.includes(page.entry.route)) throw new Error("not TabBar page");
+  const index = Number(args.index);
+  if (!Number.isInteger(index) || index < 0 || index >= tabRoutes.length) {
+    throw new Error("tabbar item not found");
+  }
+  return index;
+}
+
+/** APIs that change the chrome around the page: the tab bar and the navigation bar. */
+const CHROME_APIS: Record<string, (args: Record<string, unknown>, page?: PageView) => void> = {
+  setTabBarBadge: (args, page) => {
+    // WeChat shows "..." for text longer than four characters
+    const text = typeof args.text === "string" ? args.text : "";
+    tabBadges.set(tabIndex(args, page), text.length > 4 ? "..." : text);
+  },
+  removeTabBarBadge: (args, page) => void tabBadges.delete(tabIndex(args, page)),
+  showTabBarRedDot: (args, page) => void tabBadges.set(tabIndex(args, page), ""),
+  hideTabBarRedDot: (args, page) => {
+    const index = tabIndex(args, page);
+    if (tabBadges.get(index) === "") tabBadges.delete(index);
+  },
+  setTabBarStyle: (args, page) => {
+    if (!page || !tabRoutes.includes(page.entry.route)) throw new Error("not TabBar page");
+    for (const key of ["color", "selectedColor", "backgroundColor", "borderStyle"] as const) {
+      if (typeof args[key] === "string") tabBarChanges[key] = args[key];
+    }
+    tabBar = themedTabBar();
+  },
+  setTabBarItem: (args, page) => {
+    const index = tabIndex(args, page);
+    const changes = tabItemChanges.get(index) ?? {};
+    for (const key of ["text", "iconPath", "selectedIconPath"] as const) {
+      if (typeof args[key] === "string") changes[key] = args[key];
+    }
+    tabItemChanges.set(index, changes);
+    tabBar = themedTabBar();
+  },
+  showTabBar: (_args, page) => {
+    if (!page || !tabRoutes.includes(page.entry.route)) throw new Error("not TabBar page");
+    tabBarHidden = false;
+    for (const view of pages.values()) applyWindow(view);
+  },
+  hideTabBar: (_args, page) => {
+    if (!page || !tabRoutes.includes(page.entry.route)) throw new Error("not TabBar page");
+    tabBarHidden = true;
+    for (const view of pages.values()) applyWindow(view);
+  },
+  showNavigationBarLoading: (_args, page) => page && (page.loading.hidden = false),
+  hideNavigationBarLoading: (_args, page) => page && (page.loading.hidden = true),
+  hideHomeButton: (_args, page) => page && (page.homeHidden = true),
+};
 
 const storageKey = `omr-storage:${manifest.appid}`;
 let lastRoute: Extract<LogicToShell, { type: "route" }> | undefined;
@@ -323,6 +471,78 @@ addEventListener(
   },
 );
 
+/** Leaves the Mini Program, as the capsule's close button does. */
+function appHide(): void {
+  if (!backgroundScreen.hidden) return;
+  backgroundScreen.hidden = false;
+  root.classList.add("omr-in-background");
+  document.documentElement.dataset.omrAppState = "background";
+  backgroundButton.textContent = "回前台";
+  toLogic({ type: "appHide" });
+}
+/** Comes back to the Mini Program from `scene`. */
+function appShow(scene = 1001): void {
+  if (backgroundScreen.hidden) return;
+  backgroundScreen.hidden = true;
+  root.classList.remove("omr-in-background");
+  document.documentElement.dataset.omrAppState = "foreground";
+  backgroundButton.textContent = "切后台";
+  toLogic({ type: "appShow", scene });
+}
+
+/** Paints the device in the system theme: WeChat's own UI, the window and tab bar variables, and each page. */
+function applyTheme(): void {
+  root.classList.toggle("omr-theme-dark", theme === "dark");
+  document.documentElement.dataset.omrTheme = theme;
+  themeButton.textContent = theme === "dark" ? "浅色模式" : "深色模式";
+  tabBar = themedTabBar();
+  for (const page of pages.values()) {
+    page.window = { ...themedWindow(page.entry.route), ...page.changes };
+    applyWindow(page);
+    page.iframe.style.colorScheme = theme;
+    page.iframe.contentWindow?.postMessage(
+      { omr: "theme", dark: darkmode && theme === "dark" },
+      "*",
+    );
+    if (manifest.themeVariables) {
+      const win = page.window;
+      const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+      const background = {
+        type: "background",
+        color: text(win.backgroundColor),
+        top: text(win.backgroundColorTop),
+        bottom: text(win.backgroundColorBottom),
+        textStyle: text(win.backgroundTextStyle),
+      };
+      page.iframe.contentWindow?.postMessage({ omr: "logic", message: background }, "*");
+    }
+  }
+  if (lastRoute) onRoute(lastRoute);
+}
+function setTheme(next: Theme): void {
+  if (next === theme) return;
+  theme = next;
+  applyTheme();
+  toLogic({ type: "theme", theme });
+}
+
+// Controls outside the device, as WeChat DevTools has above its simulator
+const toolbar = el("div", "omr-toolbar");
+const themeButton = el("button", "omr-toolbar-button");
+themeButton.setAttribute("type", "button");
+themeButton.dataset.omrAction = "toggleTheme";
+themeButton.addEventListener("click", () => setTheme(theme === "dark" ? "light" : "dark"));
+const backgroundButton = el("button", "omr-toolbar-button", "切后台");
+backgroundButton.setAttribute("type", "button");
+backgroundButton.dataset.omrAction = "toggleBackground";
+backgroundButton.addEventListener("click", () => (backgroundScreen.hidden ? appHide() : appShow()));
+toolbar.append(themeButton, backgroundButton);
+root.before(toolbar);
+// For automation: window.omr.appHide(), appShow(scene), setTheme("dark")
+Object.assign(window, { omr: { appHide, appShow, setTheme } });
+document.documentElement.dataset.omrAppState = "foreground";
+applyTheme();
+
 const launchParam = params.get("page");
 const [launchPath = "", launchSearch = ""] = (launchParam ?? "").replace(/^\/+/, "").split("?", 2);
 const saved = sessionStorage.getItem(storageKey);
@@ -337,4 +557,5 @@ toLogic({
   launch: launchPath
     ? { path: launchPath, query: Object.fromEntries(new URLSearchParams(launchSearch)) }
     : undefined,
+  theme,
 });

@@ -1,7 +1,8 @@
 /**
  * Native UI drawn by the shell over the page: toasts, modals, action sheets, the
- * privacy popup, the consent dialogs of authorization and the nickname bar above
- * the keyboard. Every button has a `data-omr-action` attribute, so automation
+ * privacy popup, the consent dialogs of authorization, the nickname bar above
+ * the keyboard, payment and subscription sheets, the scanner, location pages and
+ * the image viewer. Every button has a `data-omr-action` attribute, so automation
  * can answer dialogs by selector.
  */
 
@@ -54,7 +55,7 @@ export function createUi(
 
   /** Shows a dialog; `build` receives `close`, which removes it and resolves with a result. */
   const dialog = (
-    kind: "center" | "sheet",
+    kind: "center" | "sheet" | "full",
     build: (close: (result: Record<string, unknown>) => void) => HTMLElement,
   ) =>
     new Promise<Record<string, unknown>>((resolve) => {
@@ -63,7 +64,9 @@ export function createUi(
         resolve(result);
       };
       const panel = build(close);
-      panel.classList.add(kind === "center" ? "omr-modal" : "omr-sheet");
+      panel.classList.add(
+        kind === "center" ? "omr-modal" : kind === "sheet" ? "omr-sheet" : "omr-fullscreen",
+      );
       const root = h("div", { class: "omr-dialog-layer" }, h("div", { class: "omr-mask" }), panel);
       layer.append(root);
     });
@@ -145,6 +148,79 @@ export function createUi(
       };
       closeNicknameBar = close;
       layer.append(bar);
+    });
+
+  /** The bar of a full-screen system page: a cancel button and a title; the capsule stays on its right. */
+  const pageBar = (title: string, onCancel: () => void) =>
+    h(
+      "div",
+      { class: "omr-page-bar" },
+      button("取消", "cancel", onCancel, "omr-page-bar-cancel"),
+      h("span", { class: "omr-page-bar-title" }, title),
+      h("span", {}),
+    );
+
+  /** A map without tiles: a grid, a pin and the coordinates. */
+  const mapPlaceholder = (latitude: unknown, longitude: unknown) =>
+    h(
+      "div",
+      { class: "omr-map" },
+      h("div", { class: "omr-map-pin" }),
+      h(
+        "div",
+        { class: "omr-map-coords" },
+        `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`,
+      ),
+    );
+
+  /** The amount of a payment in fen, as WeChat Pay shows it. */
+  const yuan = (fen: unknown) => (typeof fen === "number" ? `¥${(fen / 100).toFixed(2)}` : "");
+
+  /** The full-screen viewer of `wx.previewImage` and `wx.previewMedia`; resolves when it closes. */
+  const preview = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const sources = (Array.isArray(args.sources) ? args.sources : []) as {
+        url: string;
+        type: string;
+        poster?: string;
+      }[];
+      let index = Math.min(Math.max(0, Number(args.current) || 0), Math.max(0, sources.length - 1));
+      const stage = h("div", { class: "omr-preview-stage" });
+      const counter = h("div", { class: "omr-preview-counter" });
+      const render = () => {
+        const source = sources[index];
+        counter.textContent = sources.length > 1 ? `${index + 1}/${sources.length}` : "";
+        if (!source) {
+          stage.replaceChildren();
+          return;
+        }
+        const media =
+          source.type === "video"
+            ? h("video", {
+                class: "omr-preview-media",
+                src: resolveAsset(source.url),
+                controls: "",
+                ...(source.poster ? { poster: resolveAsset(source.poster) } : {}),
+              })
+            : h("img", { class: "omr-preview-media", src: resolveAsset(source.url), alt: "" });
+        if (source.type !== "video") media.addEventListener("click", () => close({}));
+        stage.replaceChildren(media);
+      };
+      const step = (delta: number) => () => {
+        index = (index + delta + sources.length) % sources.length;
+        render();
+      };
+      render();
+      const root = h(
+        "div",
+        { class: "omr-preview", "data-omr-dialog": "previewImage" },
+        counter,
+        stage,
+        sources.length > 1 && button("‹", "prev", step(-1), "omr-preview-prev"),
+        sources.length > 1 && button("›", "next", step(1), "omr-preview-next"),
+        button("×", "close", () => close({}), "omr-preview-close"),
+      );
+      return root;
     });
 
   const avatar = (src: unknown) =>
@@ -276,6 +352,125 @@ export function createUi(
             button("取消", "deny", () => close({ allow: false })),
           );
         });
+      case "payment":
+        return dialog("sheet", (close) =>
+          h(
+            "div",
+            { class: "omr-payment", "data-omr-dialog": "payment" },
+            button("×", "cancel", () => close({ pay: false }), "omr-payment-close"),
+            h("div", { class: "omr-payment-title" }, "微信支付"),
+            h("div", { class: "omr-payment-payee" }, `付款给 ${text(args.appName) || appName}`),
+            h(
+              "div",
+              { class: "omr-payment-amount" },
+              yuan(args.amount) || h("span", { class: "omr-payment-unknown" }, "模拟支付"),
+            ),
+            h(
+              "div",
+              { class: "omr-payment-row" },
+              h("span", {}, "付款方式"),
+              h("span", { class: "omr-payment-method" }, "零钱"),
+            ),
+            button("支付", "pay", () => close({ pay: true }), "omr-payment-pay"),
+          ),
+        );
+      case "subscribeMessage":
+        return dialog("sheet", (close) => {
+          const ids = (Array.isArray(args.tmplIds) ? args.tmplIds : []).map(String);
+          const accepted = new Set(ids);
+          const rows = ids.map((id, index) => {
+            const toggle = h("button", {
+              type: "button",
+              class: "omr-switch omr-switch-on",
+              role: "switch",
+              "aria-checked": "true",
+              "data-omr-action": `toggle-${index}`,
+            });
+            toggle.addEventListener("click", () => {
+              const on = !accepted.delete(id);
+              if (on) accepted.add(id);
+              toggle.classList.toggle("omr-switch-on", on);
+              toggle.setAttribute("aria-checked", String(on));
+            });
+            return h(
+              "div",
+              { class: "omr-subscribe-row", "data-tmpl-id": id },
+              h("span", { class: "omr-subscribe-id" }, id),
+              toggle,
+            );
+          });
+          return h(
+            "div",
+            { class: "omr-consent", "data-omr-dialog": "subscribeMessage" },
+            h(
+              "div",
+              { class: "omr-consent-app" },
+              h("span", { class: "omr-app-icon" }, (text(args.appName) || appName).slice(0, 1)),
+              h("span", {}, `${text(args.appName) || appName} 申请`),
+            ),
+            h("div", { class: "omr-consent-title" }, "发送以下订阅消息"),
+            h("div", { class: "omr-consent-body omr-subscribe-list" }, ...rows),
+            h(
+              "div",
+              { class: "omr-consent-buttons" },
+              button("取消", "deny", () => close({ accepted: [] })),
+              button(
+                "允许",
+                "allow",
+                () => close({ accepted: ids.filter((id) => accepted.has(id)) }),
+                "omr-primary",
+              ),
+            ),
+          );
+        });
+      case "scanCode":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-scan", "data-omr-dialog": "scanCode" },
+            button("×", "cancel", () => close({}), "omr-scan-close"),
+            h("div", { class: "omr-scan-frame" }, h("div", { class: "omr-scan-line" })),
+            h("div", { class: "omr-scan-tip" }, "将二维码/条码放入框内，即可自动扫描"),
+            h("div", { class: "omr-scan-result" }, `模拟识别结果：${text(args.result)}`),
+            button("识别", "scan", () => close({ scanned: true }), "omr-scan-button"),
+            args.onlyFromCamera
+              ? undefined
+              : button("相册", "album", () => close({ scanned: true }), "omr-scan-album"),
+          ),
+        );
+      case "chooseLocation":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-location", "data-omr-dialog": "chooseLocation" },
+            pageBar("位置", () => close({})),
+            mapPlaceholder(args.latitude, args.longitude),
+            h(
+              "div",
+              { class: "omr-location-item omr-location-selected" },
+              h("div", { class: "omr-location-name" }, text(args.name)),
+              h("div", { class: "omr-location-address" }, text(args.address)),
+              button("完成", "confirm", () => close({ confirm: true }), "omr-location-done"),
+            ),
+          ),
+        );
+      case "openLocation":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-location", "data-omr-dialog": "openLocation" },
+            pageBar("位置", () => close({})),
+            mapPlaceholder(args.latitude, args.longitude),
+            h(
+              "div",
+              { class: "omr-location-item" },
+              h("div", { class: "omr-location-name" }, text(args.name) || "位置"),
+              h("div", { class: "omr-location-address" }, text(args.address)),
+            ),
+          ),
+        );
+      case "previewImage":
+        return preview(args);
       default:
         console.warn(`[omr] the simulator does not show "${name}"`);
         return {};

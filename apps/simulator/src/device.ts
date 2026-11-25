@@ -86,7 +86,6 @@ export function systemInfo(device: Device): SystemInfo {
     version: "8.0.50",
     SDKVersion: "3.5.0",
     fontSizeSetting: 16,
-    theme: "light",
     deviceOrientation: "portrait",
     benchmarkLevel: 1,
     enableDebug: false,

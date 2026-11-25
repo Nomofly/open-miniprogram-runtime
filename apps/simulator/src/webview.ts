@@ -17,15 +17,24 @@ export interface WebviewInit {
   windowWidth: number;
   hairline: number;
   styleV2: boolean;
+  /** Whether built-in components take their dark defaults: app.json `"darkmode": true` in the dark theme. */
+  dark: boolean;
 }
 
-type FromShell = WebviewInit | { omr: "logic"; message: LogicToView };
+type FromShell =
+  | WebviewInit
+  | { omr: "logic"; message: LogicToView }
+  /** The theme changed; `prefers-color-scheme` follows the iframe's `color-scheme` by itself. */
+  | { omr: "theme"; dark: boolean };
 
 let handle: ((message: LogicToView) => void) | undefined;
 
 addEventListener("message", (event: MessageEvent<FromShell>) => {
   if (event.source !== parent) return;
   const data = event.data;
+  if (data?.omr === "init" || data?.omr === "theme") {
+    document.documentElement.classList.toggle("omr-dark", data.dark);
+  }
   if (data?.omr === "init" && !handle) {
     // The opaque origin cannot be named, so the shell's origin is this document's URL origin
     const shell = location.origin;

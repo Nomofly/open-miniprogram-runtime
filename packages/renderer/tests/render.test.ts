@@ -9,12 +9,17 @@ function render(
   data: Record<string, unknown>,
   extraFiles: Record<string, string> = {},
 ) {
-  const files = Object.fromEntries(
-    Object.entries({ "pages/a/a.wxml": wxml, ...extraFiles }).map(([path, source]) => [
-      path,
-      compileWxml(source, path),
-    ]),
-  );
+  // Through JSON, as the shell sends the bundle to the page
+  const files = JSON.parse(
+    JSON.stringify(
+      Object.fromEntries(
+        Object.entries({ "pages/a/a.wxml": wxml, ...extraFiles }).map(([path, source]) => [
+          path,
+          compileWxml(source, path),
+        ]),
+      ),
+    ),
+  ) as Record<string, ReturnType<typeof compileWxml>>;
   const page = {
     path: "pages/a/a",
     template: "pages/a/a.wxml",
@@ -78,6 +83,15 @@ describe("renderScope", () => {
       { "tpl/item.wxml": `<template name="item"><view>{{title}} x{{n}}</view></template>` },
     );
     expect(show(nodes)).toBe("<wx-view>Hi x3");
+  });
+
+  test("a template that renders itself stops, and Object.prototype names are not templates", () => {
+    const nodes = render(
+      `<template name="t"><view>a</view><template is="t" /></template><template is="t" /><template is="constructor" />`,
+      {},
+    );
+    // Templates rendered at depths 0 to 63 each add one view; the 65th is cut
+    expect(show(nodes)).toBe("<wx-view>a".repeat(64));
   });
 
   test("custom component hosts keep every attribute as a property and only DOM attributes on the element", () => {

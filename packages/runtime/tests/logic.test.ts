@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
 import { decodeCode, mockWechatApi, startLogic } from "../src/index.ts";
-import type { LogicToShell, SimulatorConfig, ViewToLogic } from "../src/index.ts";
+import type {
+  AncestorBindings,
+  LogicToShell,
+  SimulatorConfig,
+  TreeNode,
+  ViewToLogic,
+} from "../src/index.ts";
 
 const SYSTEM = {
   windowWidth: 375,
@@ -18,6 +24,7 @@ function boot(
   appJson: Record<string, unknown> & { pages: string[] },
   config: SimulatorConfig = {},
   windows: Record<string, Record<string, unknown>> = {},
+  launch?: { path: string; query: Record<string, string> },
 ) {
   const sent: LogicToShell[] = [];
   const handle = startLogic((message) => sent.push(message));
@@ -42,6 +49,7 @@ function boot(
     menuButton: MENU_BUTTON,
     chrome: { navigationBar: 64, tabBar: 50 },
     appService,
+    launch,
   });
   const view = (webviewId: number, message: ViewToLogic) =>
     handle({ type: "view", webviewId, message });
@@ -61,6 +69,31 @@ const toView = (sent: LogicToShell[], type: string) =>
   );
 
 const APP = "App({ log: [] });";
+const bind = (name: string, handler: string, catchIt = false) => ({
+  name,
+  handler,
+  catch: catchIt,
+  capture: false,
+});
+/** Attaches components to page 1 as the view does: `[nodeId, ownerId, path, id, props?]`. */
+const attachAll = (
+  view: (webviewId: number, message: ViewToLogic) => void,
+  list: [number, number, string, string, Record<string, unknown>?][],
+) => {
+  for (const [nodeId, ownerId, path, id, props = {}] of list) {
+    view(1, { type: "attach", nodeId, ownerId, path, props, listeners: {}, id, dataset: {} });
+  }
+};
+const tree = (
+  nodeId: number,
+  parentId: number,
+  tag: string,
+  className = "",
+  events: ReturnType<typeof bind>[] = [],
+  ancestors: AncestorBindings[] = [],
+): TreeNode => ({ nodeId, parentId, tag, className, events, ancestors });
+const currentPage = () => (globalThis as any).getCurrentPages()[0];
+
 const tapOn = (id: string) => {
   const target = { id, dataset: {} };
   return { type: "tap", timeStamp: 0, target, currentTarget: target, detail: {} };
@@ -150,6 +183,66 @@ describe("logic layer", () => {
     await settle();
     await settle();
     expect(log()).toEqual(["checkSession:fail session time out, need relogin", "checkSession:ok"]);
+  });
+
+  test("the chooseAvatar button gives the avatar as a temporary file that wx.uploadFile can read", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onAvatar(e) { getApp().log.push(e.detail.avatarUrl); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow", privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler: "onAvatar",
+      openType: "chooseAvatar",
+      event: { type: "chooseavatar", timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+    await settle();
+    const [avatarUrl] = log() as string[];
+    expect(avatarUrl).toMatch(/^http:\/\/tmp\/.+\.svg$/);
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    const content = wx.getFileSystemManager().readFileSync(avatarUrl, "utf8") as string;
+    expect(content).toContain("<svg");
+  });
+
+  test("a return closes an open page-container instead of the page, and a hidden page is told so its videos pause", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/a/a.js": "Page({});", "pages/b/b.js": "Page({});" },
+      { pages: ["pages/a/a", "pages/b/b"] },
+    );
+    view(1, { type: "ready" });
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    wx.navigateTo({ url: "/pages/b/b" });
+    await settle();
+    view(2, { type: "ready" });
+    const visibility = (webviewId: number) =>
+      sent.flatMap((message) =>
+        message.type === "toView" &&
+        message.webviewId === webviewId &&
+        message.message.type === "pageVisibility"
+          ? [message.message.visible]
+          : [],
+      );
+    expect(visibility(1)).toEqual([true, false]);
+
+    view(2, { type: "pageContainer", open: true });
+    handle({ type: "navigateBack" });
+    await settle();
+    await expect(wx.navigateBack()).resolves.toMatchObject({ errMsg: "navigateBack:ok" });
+    expect(toView(sent, "closePageContainer")).toHaveLength(2);
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual(["pages/a/a", "pages/b/b"]);
+
+    view(2, { type: "pageContainer", open: false });
+    handle({ type: "navigateBack" });
+    await settle();
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual(["pages/a/a"]);
+    expect(visibility(1)).toEqual([true, false, true]);
   });
 
   test("a phone number button asks for consent and gives a code for the configured number", async () => {
@@ -560,20 +653,441 @@ describe("logic layer", () => {
       options: { styleIsolation: "isolated" },
     });
 
-    view(1, { type: "props", nodeId: 1, props: { start: 5 }, listeners: {} });
+    view(1, {
+      type: "props",
+      nodeId: 1,
+      props: { start: 5 },
+      listeners: {},
+      id: "counter",
+      dataset: {},
+    });
     expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 1, patch: { doubled: 10 } });
 
+    // The host's id changed in the owner's template: selectComponent finds it by the new id only
     view(1, {
       type: "props",
       nodeId: 1,
       props: { start: 5 },
       listeners: { change: { handler: "onChange", catch: false } },
+      id: "renamed",
+      dataset: { kind: "main" },
     });
     const page = (globalThis as any).getCurrentPages()[0];
-    page.selectComponent("#counter").bump();
+    expect(page.selectComponent("#counter")).toBeNull();
+    page.selectComponent("#renamed").bump();
     expect(log()).toEqual([
       ["attached", 3, "Clicks"],
-      ["change", { value: 6 }, "counter"],
+      ["change", { value: 6 }, "renamed"],
     ]);
+  });
+
+  test("navigateTo connects the opener and the new page with an event channel", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/list/list.js": `Page({
+          async onLoad() {
+            const { eventChannel } = await wx.navigateTo({
+              url: "/pages/detail/detail",
+              events: { saved: (value) => getApp().log.push("opener got " + value) },
+            });
+            // Emitted before the new page has loaded: it waits for the listener
+            eventChannel.emit("item", { id: 7 });
+          },
+        });`,
+        "pages/detail/detail.js": `Page({
+          onLoad() {
+            const channel = this.getOpenerEventChannel();
+            channel.on("item", (item) => {
+              getApp().log.push("detail got " + item.id);
+              channel.emit("saved", item.id * 2);
+            });
+          },
+        });`,
+      },
+      { pages: ["pages/list/list", "pages/detail/detail"] },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    expect(log()).toEqual([]);
+    view(2, { type: "ready" });
+    expect(log()).toEqual(["detail got 7", "opener got 14"]);
+  });
+
+  test("a button event answered after its page was closed does not reach the page", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/a/a.js": `Page({ onPhone(e) { getApp().log.push("a " + e.detail.errMsg); } });`,
+        "pages/b/b.js": `Page({});`,
+      },
+      { pages: ["pages/a/a", "pages/b/b"] },
+      { auth: { privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler: "onPhone",
+      openType: "getPhoneNumber",
+      event: { type: "getphonenumber", timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+    await settle();
+    const ui = sent.find((message) => message.type === "ui") as Extract<
+      LogicToShell,
+      { type: "ui" }
+    >;
+    (globalThis as any).wx.redirectTo({ url: "/pages/b/b" });
+    await settle();
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(log()).toEqual([]);
+  });
+
+  test("pull-down refresh: the API starts the view's animation and the view's refresh reaches the page", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          onLoad() { wx.startPullDownRefresh(); },
+          onPullDownRefresh() { getApp().log.push("refresh"); wx.stopPullDownRefresh(); },
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    // The page hears of the refresh only once the view starts it
+    expect(log()).toEqual([]);
+    view(1, { type: "pullDownRefresh" });
+    await settle();
+    expect(log()).toEqual(["refresh"]);
+    expect(toView(sent, "pullDownRefresh")).toEqual([
+      { type: "pullDownRefresh", refreshing: true },
+      { type: "pullDownRefresh", refreshing: false },
+    ]);
+  });
+
+  test("a page's <navigation-bar> sets the title, colors and loading of its own navigation bar", () => {
+    const { sent, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    view(1, {
+      type: "navigationBar",
+      attributes: {
+        title: "详情",
+        loading: true,
+        "front-color": "#ffffff",
+        "background-color": "#07c160",
+      },
+    });
+    const uis = sent.flatMap((message) =>
+      message.type === "ui" ? [{ name: message.name, args: message.args }] : [],
+    );
+    expect(uis).toEqual([
+      { name: "setNavigationBarTitle", args: { webviewId: 1, title: "详情" } },
+      {
+        name: "setNavigationBarColor",
+        args: { webviewId: 1, frontColor: "#ffffff", backgroundColor: "#07c160" },
+      },
+      { name: "showNavigationBarLoading", args: { webviewId: 1 } },
+    ]);
+  });
+
+  test("a camera moved while it waits for consent shows in the capsule once", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      { auth: { privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    // Moving an element in the DOM removes and inserts it again
+    view(1, { type: "camera", cameraId: 3, mounted: true });
+    await settle();
+    view(1, { type: "camera", cameraId: 3, mounted: false });
+    view(1, { type: "camera", cameraId: 3, mounted: true });
+    await settle();
+    const ui = sent.find((message) => message.type === "ui") as Extract<
+      LogicToShell,
+      { type: "ui" }
+    >;
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 4; i++) await settle();
+    view(1, { type: "camera", cameraId: 3, mounted: false });
+    await settle();
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["camera"], []]);
+    expect(toView(sent, "cameraState")).toEqual([{ type: "cameraState", cameraId: 3 }]);
+  });
+
+  test("triggerEvent reaches the host, bubbles within its owner's template, and crosses components when composed", () => {
+    // The example from WeChat's component event guide: my-component sits in another-component's slot
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          pageEventListener1(e) { getApp().log.push("page1 " + e.currentTarget.id + " " + e.target.id); },
+          pageEventListener2(e) { getApp().log.push("page2 " + e.currentTarget.id); },
+        });`,
+        "components/another/another.js": `Component({ methods: { anotherEventListener() { getApp().log.push("another"); } } });`,
+        "components/mine/mine.js": `Component({ methods: { fire(options) { this.triggerEvent("customevent", {}, options); } } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [
+      [1, 0, "components/another/another", "another"],
+      [2, 0, "components/mine/mine", "mine"],
+    ]);
+    const place = (catchInAnother: boolean) =>
+      view(1, {
+        type: "tree",
+        nodes: [
+          tree(1, 0, "another-component", "", [bind("customevent", "pageEventListener1")]),
+          tree(
+            2,
+            1,
+            "my-component",
+            "",
+            [bind("customevent", "pageEventListener2")],
+            [
+              {
+                ownerId: 1,
+                id: "",
+                dataset: {},
+                events: [bind("customevent", "anotherEventListener", catchInAnother)],
+              },
+              {
+                ownerId: 0,
+                id: "another",
+                dataset: {},
+                events: [bind("customevent", "pageEventListener1")],
+              },
+            ],
+          ),
+        ],
+      });
+    place(false);
+    const mine = currentPage().selectComponent("#mine");
+    const fire = (options: object) => {
+      log().length = 0;
+      mine.fire(options);
+      return [...log()];
+    };
+    expect(fire({})).toEqual(["page2 mine"]);
+    expect(fire({ bubbles: true })).toEqual(["page2 mine", "page1 another mine"]);
+    expect(fire({ bubbles: true, composed: true })).toEqual([
+      "page2 mine",
+      "another",
+      "page1 another mine",
+    ]);
+    // A catch binding inside another-component stops the event there
+    place(true);
+    expect(fire({ bubbles: true, composed: true })).toEqual(["page2 mine", "another"]);
+  });
+
+  test("selectComponent matches tags, ids, classes and combinators within the caller's template", () => {
+    const empty = "Component({});";
+    const { view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "components/list/list.js": empty,
+        "components/item/item.js": empty,
+        "components/wrap/wrap.js": empty,
+        "components/outer/outer.js": empty,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    // <list class="list"><item class="item a" id="i1"/><item class="item" id="i2"/><wrap><item id="i5"/></wrap></list>
+    // <item class="item" id="i3"/><outer id="o"/>, where outer's template has <item class="item inner" id="i4"/>
+    attachAll(view, [
+      [1, 0, "components/list/list", "l"],
+      [2, 0, "components/item/item", "i1"],
+      [3, 0, "components/item/item", "i2"],
+      [7, 0, "components/wrap/wrap", "w"],
+      [8, 0, "components/item/item", "i5"],
+      [4, 0, "components/item/item", "i3"],
+      [5, 0, "components/outer/outer", "o"],
+      [6, 5, "components/item/item", "i4"],
+    ]);
+    view(1, {
+      type: "tree",
+      nodes: [
+        tree(1, 0, "list", "list"),
+        tree(2, 1, "item", "item a"),
+        tree(3, 1, "item", "item"),
+        tree(7, 1, "wrap"),
+        tree(8, 7, "item"),
+        tree(4, 0, "item", "item"),
+        tree(5, 0, "outer"),
+        tree(6, 5, "item", "item inner"),
+      ],
+    });
+    const page = currentPage();
+    const ids = (selector: string, from = page) =>
+      from.selectAllComponents(selector).map((comp: { id: string }) => comp.id);
+    expect(ids(".item")).toEqual(["i1", "i2", "i3"]);
+    expect(ids("item")).toEqual(["i1", "i2", "i5", "i3"]);
+    expect(ids("item.a")).toEqual(["i1"]);
+    expect(ids(".list item")).toEqual(["i1", "i2", "i5"]);
+    expect(ids(".list > item")).toEqual(["i1", "i2"]);
+    expect(ids("#i3, .a")).toEqual(["i1", "i3"]);
+    expect(ids("#o .item")).toEqual([]);
+    expect(ids("#o >>> .item")).toEqual(["i4"]);
+    expect(ids(".inner", page.selectComponent("#o"))).toEqual(["i4"]);
+    expect(page.selectComponent(".missing")).toBeNull();
+    expect(page.selectComponent("#i4")).toBeNull();
+    expect(page.selectComponent("#o").selectComponent("#i4").selectOwnerComponent().id).toBe("o");
+  });
+
+  test("relations link parents and children, and built-in behaviors and definition filters apply", () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "components/list/list.js": `Component({
+          behaviors: ["wx://component-export"],
+          relations: { "../item/item": {
+            type: "child",
+            linked(target) { getApp().log.push("list linked " + target.id); },
+            unlinked(target) { getApp().log.push("list unlinked " + target.id); },
+          } },
+          export() { return { kind: "list" }; },
+        });`,
+        "components/item/item.js": `
+          const marker = Behavior({
+            definitionFilter(fields) { fields.data = Object.assign({}, fields.data, { filtered: true }); },
+          });
+          Component({
+            behaviors: [marker, "wx://form-field"],
+            relations: { "../list/list": { type: "parent", linked(target) { getApp().log.push("item linked " + target.is); } } },
+            methods: { marked() { return this.hasBehavior(marker); } },
+          });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [
+      [1, 0, "components/list/list", "l"],
+      [2, 0, "components/item/item", "i1", { name: "size", value: "L" }],
+      [3, 0, "components/item/item", "i2"],
+    ]);
+    view(1, {
+      type: "tree",
+      nodes: [tree(1, 0, "list"), tree(2, 1, "item"), tree(3, 1, "item")],
+    });
+    expect([...(log() as string[])].sort((a, b) => a.localeCompare(b))).toEqual([
+      "item linked components/list/list",
+      "item linked components/list/list",
+      "list linked i1",
+      "list linked i2",
+    ]);
+    const page = currentPage();
+    // wx://component-export: selectComponent returns what export returns
+    expect(page.selectComponent("#l")).toEqual({ kind: "list" });
+    const item = page.selectComponent("#i1");
+    const list = item.getRelationNodes("../list/list")[0];
+    expect(list.getRelationNodes("../item/item").map((comp: { id: string }) => comp.id)).toEqual([
+      "i1",
+      "i2",
+    ]);
+    // wx://form-field adds the name and value properties, and a form submits them
+    expect(item.data).toMatchObject({ name: "size", value: "L", filtered: true });
+    expect(item.marked()).toBe(true);
+    expect(item.hasBehavior("wx://form-field")).toBe(true);
+    expect(list.hasBehavior("wx://form-field")).toBe(false);
+    const inits = toView(sent, "componentInit") as { nodeId: number; options: object }[];
+    expect(inits.find((init) => init.nodeId === 2)!.options).toMatchObject({ formField: true });
+
+    log().length = 0;
+    view(1, { type: "detach", nodeIds: [3] });
+    expect(log()).toEqual(["list unlinked i2"]);
+    expect(list.getRelationNodes("../item/item")).toHaveLength(1);
+  });
+
+  test("pure data fields stay in the logic layer, and routers resolve against the component's path", async () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "pages/detail/detail.js": "Page({});",
+        "components/card/card.js": `Component({
+          options: { pureDataPattern: /^_/ },
+          data: { _raw: 1, shown: 2 },
+          methods: { update() { this.setData({ _raw: 3, shown: 4 }); } },
+        });`,
+      },
+      { pages: ["pages/index/index", "pages/detail/detail"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [[1, 0, "components/card/card", "card"]]);
+    const card = currentPage().selectComponent("#card");
+    card.update();
+    expect(toView(sent, "componentInit")[0]).toMatchObject({ data: { shown: 2 } });
+    expect((toView(sent, "componentInit")[0] as { data: object }).data).not.toHaveProperty("_raw");
+    expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 1, patch: { shown: 4 } });
+    expect((toView(sent, "setData").at(-1) as { patch: object }).patch).not.toHaveProperty("_raw");
+    expect(card.data._raw).toBe(3);
+
+    card.router.navigateTo({ url: "../../pages/detail/detail?id=7" });
+    await settle();
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual([
+      "pages/index/index",
+      "pages/detail/detail",
+    ]);
+  });
+
+  test("a launch page that does not exist calls onPageNotFound, which may redirect", async () => {
+    const pages = ["pages/index/index", "pages/other/other"];
+    const files = {
+      "app.js": `App({ log: [], onPageNotFound(res) { this.log.push(res); wx.redirectTo({ url: "/pages/other/other" }); } });`,
+      "pages/index/index.js": "Page({});",
+      "pages/other/other.js": "Page({});",
+    };
+    const launch = { path: "pages/missing/missing", query: { a: "1" } };
+    const redirected = boot(files, { pages }, {}, {}, launch);
+    await settle();
+    expect(redirected.log()).toEqual([
+      { path: "pages/missing/missing", query: { a: "1" }, isEntryPage: true },
+    ]);
+    expect(lastRoute(redirected.sent).stack.map((entry) => entry.route)).toEqual([
+      "pages/other/other",
+    ]);
+
+    // Without a redirect, the entry page opens
+    const plain = boot({ ...files, "app.js": APP }, { pages }, {}, {}, launch);
+    await settle();
+    expect(lastRoute(plain.sent).stack.map((entry) => entry.route)).toEqual(["pages/index/index"]);
+  });
+
+  test("a tab page's custom tab bar exists in onShow and is the component the view attaches", () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onShow() { this.getTabBar().setData({ selected: 1 }); } });`,
+        "custom-tab-bar/index.js": `Component({
+          data: { selected: 0 },
+          lifetimes: { attached() { getApp().log.push("attached"); } },
+        });`,
+      },
+      {
+        pages: ["pages/index/index"],
+        tabBar: { custom: true, list: [{ pagePath: "pages/index/index" }] },
+      },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [[4, 0, "custom-tab-bar/index", ""]]);
+    expect(toView(sent, "componentInit")).toMatchObject([{ nodeId: 4, data: { selected: 1 } }]);
+    expect(log()).toEqual(["attached"]);
+    const page = currentPage();
+    page.getTabBar().setData({ selected: 0 });
+    expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 4, patch: { selected: 0 } });
   });
 });

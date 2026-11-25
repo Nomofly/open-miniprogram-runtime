@@ -6,8 +6,8 @@ body {
 }
 body {
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 24px 0;
   font-family:
     -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC",
@@ -227,6 +227,82 @@ html[data-frame="0"] #omr-device {
 .omr-tab-text {
   font-size: 10px;
   line-height: 1.4;
+}
+
+.omr-heading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 50%;
+  min-width: 0;
+}
+.omr-heading .omr-title {
+  max-width: none;
+}
+.omr-nav-loading {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: omr-nav-spin 0.8s linear infinite;
+}
+.omr-nav-loading[hidden] {
+  display: none;
+}
+@keyframes omr-nav-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.omr-home {
+  position: absolute;
+  left: 7px;
+  bottom: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.6);
+  color: #000;
+  cursor: pointer;
+}
+.omr-home[hidden] {
+  display: none;
+}
+.omr-tab {
+  position: relative;
+}
+.omr-tab-badge,
+.omr-tab-dot {
+  position: absolute;
+  top: 4px;
+  left: calc(50% + 6px);
+  background: #fa5151;
+  color: #fff;
+}
+.omr-tab-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+.omr-tab-dot {
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 /* Native UI over the page */
@@ -544,4 +620,489 @@ html[data-frame="0"] #omr-device {
   color: #000;
   font-size: 14px;
   line-height: 18px;
+}
+
+/* WeChat caps the modal's height: a long content scrolls between the title and the buttons */
+.omr-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 240px);
+}
+.omr-modal > .omr-modal-title,
+.omr-modal > .omr-modal-buttons {
+  flex: none;
+}
+/* The gap below the title stays put while long content scrolls under it */
+.omr-modal > .omr-modal-title {
+  padding-bottom: 16px;
+}
+.omr-modal > .omr-modal-title + .omr-modal-content {
+  padding-top: 0;
+}
+.omr-modal > .omr-modal-title + .omr-modal-buttons {
+  margin-top: 16px;
+}
+.omr-modal > .omr-modal-content {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Full-screen system pages: the scanner, location pages and the image viewer */
+.omr-fullscreen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.omr-page-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 44px;
+  padding: var(--omr-status-bar, 59px) 16px 0;
+  background: #f7f7f7;
+}
+.omr-page-bar .omr-button {
+  width: auto;
+  font-size: 17px;
+}
+.omr-page-bar-cancel {
+  justify-self: start;
+}
+.omr-page-bar-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Payment sheet */
+.omr-payment {
+  padding: 20px 24px 50px;
+  text-align: center;
+}
+.omr-payment-close {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 36px;
+  height: 36px;
+  font-size: 28px;
+  line-height: 36px;
+  color: rgba(0, 0, 0, 0.6);
+}
+.omr-payment-title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.omr-payment-payee {
+  margin-top: 28px;
+  color: rgba(0, 0, 0, 0.9);
+  font-size: 15px;
+}
+.omr-payment-amount {
+  margin-top: 8px;
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.omr-payment-unknown {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 22px;
+  font-weight: 400;
+}
+.omr-payment-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 28px;
+  padding: 16px 0;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 15px;
+}
+.omr-payment-method {
+  color: #000;
+}
+.omr-payment-pay {
+  width: 184px;
+  margin: 32px auto 0;
+  padding: 12px 0;
+  border-radius: 8px;
+  background: #07c160;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Subscription message sheet */
+.omr-subscribe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.omr-subscribe-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.omr-subscribe-id {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.omr-switch {
+  position: relative;
+  flex: none;
+  width: 50px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 15px;
+  background: #e5e5e5;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.omr-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s;
+}
+.omr-switch-on {
+  background: #07c160;
+}
+.omr-switch-on::after {
+  transform: translateX(20px);
+}
+
+/* Scanner */
+.omr-scan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #111;
+  color: #fff;
+}
+.omr-scan .omr-button {
+  width: auto;
+}
+.omr-scan-close {
+  position: absolute;
+  top: var(--omr-status-bar, 59px);
+  left: 12px;
+  width: 44px;
+  height: 44px;
+  font-size: 30px;
+}
+.omr-scan-frame {
+  position: relative;
+  width: 240px;
+  height: 240px;
+  margin-top: 200px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 12px;
+}
+.omr-scan-line {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  height: 2px;
+  background: #07c160;
+  box-shadow: 0 0 12px 2px rgba(7, 193, 96, 0.6);
+  animation: omr-scan 2s ease-in-out infinite;
+}
+@keyframes omr-scan {
+  from {
+    top: 10%;
+  }
+  to {
+    top: 90%;
+  }
+}
+.omr-scan-tip {
+  margin-top: 20px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+}
+.omr-scan-result {
+  max-width: 80%;
+  margin-top: 12px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.omr-scan-button {
+  margin-top: 32px;
+  padding: 10px 40px;
+  border-radius: 8px;
+  background: #07c160;
+  font-size: 17px;
+  font-weight: 600;
+}
+.omr-scan-album {
+  position: absolute;
+  right: 32px;
+  bottom: 60px;
+  font-size: 15px;
+}
+
+/* Location pages */
+.omr-location {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+.omr-map {
+  position: relative;
+  flex: 1;
+  background-color: #eef1e8;
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.omr-map-pin {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 0;
+  background: #fa5151;
+  transform: translate(-50%, -100%) rotate(-45deg);
+}
+.omr-map-pin::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+}
+.omr-map-coords {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  color: rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+.omr-location-item {
+  padding: 16px 24px 50px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+.omr-location-selected .omr-location-name::after {
+  content: "✓";
+  float: right;
+  color: #07c160;
+}
+.omr-location-name {
+  font-size: 17px;
+}
+.omr-location-address {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+}
+.omr-location-done {
+  margin-top: 20px;
+  padding: 12px 0;
+  border-radius: 8px;
+  background: #07c160;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Image viewer */
+.omr-preview {
+  background: #000;
+  color: #fff;
+}
+.omr-preview-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.omr-preview-media {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.omr-preview-counter {
+  position: absolute;
+  top: 70px;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  font-size: 15px;
+  text-align: center;
+}
+.omr-preview .omr-button {
+  position: absolute;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 32px;
+  line-height: 44px;
+}
+.omr-preview-close {
+  top: var(--omr-status-bar, 59px);
+  left: 8px;
+}
+.omr-preview-prev,
+.omr-preview-next {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.omr-preview-prev {
+  left: 4px;
+}
+.omr-preview-next {
+  right: 4px;
+}
+
+/* Controls outside the device; headless screenshots of ?frame=0 leave them out */
+.omr-toolbar {
+  display: flex;
+  gap: 8px;
+  margin: -12px 0 12px;
+}
+html[data-frame="0"] .omr-toolbar {
+  display: none;
+}
+.omr-toolbar-button {
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* After leaving: WeChat's recent Mini Programs, over the pages that keep running behind it */
+.omr-background {
+  position: absolute;
+  inset: 0;
+  /* Over the navigation and tab bars, under the status bar */
+  z-index: 15;
+  box-sizing: border-box;
+  background: #ededed;
+  color: rgba(0, 0, 0, 0.9);
+}
+.omr-background[hidden] {
+  display: none;
+}
+#omr-device.omr-in-background .omr-capsule,
+#omr-device.omr-in-background .omr-tabbar {
+  display: none;
+}
+#omr-device.omr-in-background .omr-statusbar {
+  color: #000;
+}
+.omr-background-title {
+  height: 44px;
+  line-height: 44px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+}
+.omr-background-label {
+  padding: 16px 24px 12px;
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.5);
+}
+.omr-recent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 80px;
+  margin-left: 16px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.omr-recent-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #07c160;
+  color: #fff;
+  font-size: 20px;
+}
+.omr-recent-name {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+/* The dark theme: WeChat's own UI turns dark whether or not the Mini Program supports DarkMode */
+#omr-device.omr-theme-dark {
+  background: #111;
+}
+#omr-device.omr-theme-dark .omr-background {
+  background: #111;
+  color: rgba(255, 255, 255, 0.8);
+}
+#omr-device.omr-theme-dark.omr-in-background .omr-statusbar {
+  color: #fff;
+}
+#omr-device.omr-theme-dark .omr-background-label {
+  color: rgba(255, 255, 255, 0.5);
+}
+#omr-device.omr-theme-dark .omr-modal,
+#omr-device.omr-theme-dark .omr-sheet {
+  background: #2c2c2c;
+  color: rgba(255, 255, 255, 0.8);
+}
+#omr-device.omr-theme-dark .omr-modal-content,
+#omr-device.omr-theme-dark .omr-action-alert {
+  color: rgba(255, 255, 255, 0.5);
+}
+#omr-device.omr-theme-dark .omr-modal-buttons,
+#omr-device.omr-theme-dark .omr-action-sheet > .omr-button + .omr-button,
+#omr-device.omr-theme-dark .omr-action-alert {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+#omr-device.omr-theme-dark .omr-modal-buttons .omr-button + .omr-button {
+  border-left-color: rgba(255, 255, 255, 0.1);
+}
+#omr-device.omr-theme-dark .omr-modal-buttons .omr-primary {
+  color: #7d90a9;
+}
+#omr-device.omr-theme-dark .omr-action-sheet {
+  background: #1e1e1e;
+}
+#omr-device.omr-theme-dark .omr-action-sheet > .omr-button,
+#omr-device.omr-theme-dark .omr-action-alert {
+  background: #2c2c2c;
 }

@@ -1,0 +1,233 @@
+/** `<scroll-view>`, with scroll events, positioning properties and the custom pull-to-refresh. */
+import { Applied, Builtin, animate, emit, lengthOf, trackDrag } from "./base.ts";
+
+type RefresherState = "idle" | "pulling" | "refreshing" | "closing";
+
+export class WxScrollView extends Builtin {
+  private readonly applied = new Applied();
+  private last = { top: 0, left: 0 };
+  private edges = { upper: true, lower: false };
+  private readonly refresher: HTMLElement;
+  private readonly dots: HTMLElement;
+  private state: RefresherState = "idle";
+  private pull = 0;
+  private stopAnimation = () => {};
+  /** When the user triggered a refresh. */
+  private refreshedAt = 0;
+  private enhancedDrag?: { x: number; y: number; t: number };
+
+  constructor() {
+    super();
+    const root = this.shadow(`<style>
+      .refresher { display: none; position: relative; overflow: hidden; height: 0; flex: none; width: 100%; }
+      :host([refresher-enabled]) .refresher { display: block; }
+      .default { position: absolute; left: 0; right: 0; bottom: 0; height: var(--omr-refresher-height, 45px); display: flex; align-items: center; justify-content: center; gap: 8px; }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: var(--omr-pull-opacity, 0); }
+      .refreshing .dot { opacity: 1; animation: omr-refresher-dot 1.2s ease-in-out infinite; }
+      .refreshing .dot:nth-child(2) { animation-delay: 0.2s; }
+      .refreshing .dot:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes omr-refresher-dot { 0%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+      .custom { position: absolute; left: 0; right: 0; bottom: 0; }
+    </style><div class="refresher" part="refresher"><div class="default"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="custom"><slot name="refresher"></slot></div></div><slot></slot>`);
+    this.refresher = root.querySelector(".refresher")!;
+    this.dots = root.querySelector(".default")!;
+    this.addEventListener("scroll", () => this.onScroll(), { passive: true });
+    this.addEventListener("scrollend", () => this.snapToPage());
+    trackDrag(this, {
+      start: () =>
+        this.flag("refresher-enabled") &&
+        this.flag("scroll-y") &&
+        this.scrollTop <= 0 &&
+        (this.state === "idle" || this.state === "closing"),
+      accept: (dx, dy) => dy > 0 && dy >= Math.abs(dx),
+      move: (_, dy) => {
+        if (dy <= 0 && this.state !== "pulling") return;
+        if (this.state !== "pulling") {
+          this.stopAnimation();
+          this.state = "pulling";
+        }
+        // The refresher follows the finger at half the speed
+        this.setPull(Math.max(0, dy / 2));
+        emit(this, "refresherpulling", { dy: this.pull });
+      },
+      end: () => {
+        if (this.state !== "pulling") return;
+        if (this.pull >= this.threshold()) {
+          this.state = "refreshing";
+          this.refreshedAt = performance.now();
+          this.glide(this.threshold());
+          emit(this, "refresherrefresh");
+        } else {
+          this.close("refresherabort");
+        }
+      },
+    });
+    // With `enhanced`, the drag events report the scroll position
+    this.addEventListener("pointerdown", (event) => {
+      if (!this.flag("enhanced")) return;
+      this.enhancedDrag = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+      emit(this, "dragstart", this.position());
+    });
+    this.addEventListener("pointermove", () => {
+      if (this.enhancedDrag) emit(this, "dragging", this.position());
+    });
+    const dragEnd = (event: PointerEvent) => {
+      const drag = this.enhancedDrag;
+      if (!drag) return;
+      this.enhancedDrag = undefined;
+      const time = Math.max(1, event.timeStamp - drag.t);
+      emit(this, "dragend", {
+        ...this.position(),
+        velocity: { x: (drag.x - event.clientX) / time, y: (drag.y - event.clientY) / time },
+      });
+    };
+    this.addEventListener("pointerup", dragEnd);
+    this.addEventListener("pointercancel", dragEnd);
+  }
+
+  private position() {
+    return { scrollTop: this.scrollTop, scrollLeft: this.scrollLeft };
+  }
+  private threshold(): number {
+    return Math.max(1, this.num("refresher-threshold", 45));
+  }
+
+  protected override update(): void {
+    this.style.setProperty("overflow-anchor", this.flag("scroll-anchoring") ? "auto" : "none");
+    this.style.setProperty(
+      "overscroll-behavior",
+      this.flag("enhanced") && this.props.bounces === false ? "none" : "",
+    );
+    this.refresher.style.background = this.str("refresher-background");
+    const style = this.str("refresher-default-style", "black");
+    this.dots.hidden = style === "none";
+    this.dots.style.color = style === "white" ? "#fff" : "#000";
+    this.refresher.style.setProperty("--omr-refresher-height", `${this.threshold()}px`);
+    this.updateRefresher();
+    // Children are patched after attributes, so scroll once the render finishes
+    queueMicrotask(() => this.applyScroll());
+  }
+
+  private updateRefresher(): void {
+    const triggered = this.flag("refresher-triggered");
+    const changed = this.applied.changed("refresher-triggered", triggered);
+    if (!this.flag("refresher-enabled")) {
+      if (this.state !== "idle") this.reset();
+      return;
+    }
+    if (triggered && changed && this.state !== "refreshing") {
+      this.state = "refreshing";
+      this.glide(this.threshold());
+      return;
+    }
+    if (this.state !== "refreshing" || triggered) return;
+    // WeChat sets the property itself when the user pulls, so setting it to false closes the
+    // refresher even when the page's data was already false. Renders right after the pull, such
+    // as a loading flag the refresh handler sets, do not close it.
+    if (changed || performance.now() - this.refreshedAt > 300) this.close("refresherrestore");
+  }
+
+  private reset(): void {
+    this.stopAnimation();
+    this.state = "idle";
+    this.setPull(0);
+  }
+
+  private close(event: "refresherabort" | "refresherrestore"): void {
+    this.state = "closing";
+    this.glide(0, () => {
+      this.state = "idle";
+      emit(this, event);
+    });
+  }
+
+  private glide(to: number, done?: () => void): void {
+    this.stopAnimation();
+    const from = this.pull;
+    this.stopAnimation = animate(from === to ? 0 : 250, (t) => {
+      this.setPull(from + (to - from) * t);
+      if (t >= 1) done?.();
+    });
+  }
+
+  private setPull(pull: number): void {
+    this.pull = pull;
+    this.refresher.style.height = `${pull}px`;
+    this.refresher.style.setProperty(
+      "--omr-pull-opacity",
+      String(Math.min(1, pull / this.threshold())),
+    );
+    this.dots.classList.toggle("refreshing", this.state === "refreshing");
+  }
+
+  private applyScroll(): void {
+    const behavior: ScrollBehavior = this.flag("scroll-with-animation") ? "smooth" : "auto";
+    // scroll-into-view comes before scroll-top
+    const intoView = this.str("scroll-into-view");
+    if (this.applied.changed("scroll-into-view", intoView) && intoView) {
+      const target = this.querySelector(`#${CSS.escape(intoView)}`);
+      if (target) {
+        const offset = target.getBoundingClientRect();
+        const box = this.getBoundingClientRect();
+        const extra = lengthOf(this.props["scroll-into-view-offset"]);
+        this.scrollTo({
+          top: this.flag("scroll-y") ? this.scrollTop + offset.top - box.top + extra : undefined,
+          left: this.flag("scroll-x")
+            ? this.scrollLeft + offset.left - box.left + extra
+            : undefined,
+          behavior,
+        });
+        return;
+      }
+    }
+    for (const [prop, axis] of [
+      ["scroll-top", "top"],
+      ["scroll-left", "left"],
+    ] as const) {
+      const value = this.props[prop];
+      if (this.applied.changed(prop, value) && value !== undefined && value !== "") {
+        this.scrollTo({ [axis]: lengthOf(value), behavior });
+      }
+    }
+  }
+
+  /** `paging-enabled` stops at whole pages of the scroll view's size. */
+  private snapToPage(): void {
+    if (!this.flag("enhanced") || !this.flag("paging-enabled")) return;
+    const vertical = this.flag("scroll-y");
+    const page = vertical ? this.clientHeight : this.clientWidth;
+    if (page <= 0) return;
+    const at = vertical ? this.scrollTop : this.scrollLeft;
+    const target = Math.round(at / page) * page;
+    if (Math.abs(target - at) > 1) {
+      this.scrollTo({ [vertical ? "top" : "left"]: target, behavior: "smooth" });
+    }
+  }
+
+  private onScroll(): void {
+    const { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth } = this;
+    emit(this, "scroll", {
+      scrollLeft,
+      scrollTop,
+      scrollHeight,
+      scrollWidth,
+      deltaX: this.last.left - scrollLeft,
+      deltaY: this.last.top - scrollTop,
+    });
+    this.last = { top: scrollTop, left: scrollLeft };
+    const vertical = this.flag("scroll-y");
+    const upperThreshold = lengthOf(this.props["upper-threshold"], 50);
+    const lowerThreshold = lengthOf(this.props["lower-threshold"], 50);
+    const upper = (vertical ? scrollTop : scrollLeft) <= upperThreshold;
+    const lower = vertical
+      ? scrollTop + clientHeight >= scrollHeight - lowerThreshold
+      : scrollLeft + clientWidth >= scrollWidth - lowerThreshold;
+    if (upper && !this.edges.upper) {
+      emit(this, "scrolltoupper", { direction: vertical ? "top" : "left" });
+    }
+    if (lower && !this.edges.lower) {
+      emit(this, "scrolltolower", { direction: vertical ? "bottom" : "right" });
+    }
+    this.edges = { upper, lower };
+  }
+}

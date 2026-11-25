@@ -3,6 +3,7 @@
  * bundle, each page's view bundle, its files, a proxy for `wx.request`, and a
  * mock of the WeChat server APIs a backend calls to finish login.
  */
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { open, readFile, realpath } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -15,9 +16,17 @@ import {
   type MiniProgramProject,
 } from "@omr/compiler";
 import {
+  FS_FILE_PATH,
+  FS_RPC_PATH,
+  MemoryFs,
   mockWechatApi,
+  PROXY_HEAD_HEADER,
   REQUEST_PROXY_PATH,
+  serveFsRequest,
   type Manifest,
+  type PackageFiles,
+  type ProxyRequest,
+  type ProxyResponse,
   type SimulatorConfig,
 } from "@omr/runtime";
 import { build, type Plugin, type Rolldown, type ViteDevServer } from "vite-plus";
@@ -76,6 +85,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".json": "application/json",
+  ".txt": "text/plain; charset=utf-8",
+  ".pdf": "application/pdf",
   ".mp4": "video/mp4",
   ".mp3": "audio/mpeg",
   ".ttf": "font/ttf",
@@ -88,6 +99,9 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
   const usedCodes = new Set<string>();
   let projectPromise: Promise<MiniProgramProject> | undefined;
   const project = () => (projectPromise ??= loadProject(options.project));
+  // One file system for the server's lifetime, like a device: user files survive page reloads
+  let packageRoot: string | undefined;
+  const fs = new MemoryFs({ packageFiles: packageFiles(() => packageRoot) });
   let webviewPromise: Promise<string> | undefined;
   const webview = () => {
     webviewPromise ??= bundleWebview();
@@ -112,6 +126,19 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
     }
     const windows: Manifest["windows"] = {};
     for (const route of loaded.pages) windows[route] = await pageWindow(loaded, route);
+    // The variables of DarkMode are read only when the app supports it, as WeChat does
+    let themeVariables: Manifest["themeVariables"];
+    const { darkmode, themeLocation } = loaded.appJson;
+    if (darkmode === true && typeof themeLocation === "string") {
+      const file = path.join(loaded.root, themeLocation);
+      try {
+        themeVariables = JSON.parse(await readFile(file, "utf8")) as Manifest["themeVariables"];
+      } catch (error) {
+        throw new Error(`invalid themeLocation ${file}: ${(error as Error).message}`, {
+          cause: error,
+        });
+      }
+    }
     return {
       appid: loaded.appid,
       appName: loaded.name,
@@ -119,6 +146,7 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       pages: loaded.pages,
       entryPage: loaded.entryPage,
       windows,
+      themeVariables,
       config,
     };
   };
@@ -137,16 +165,47 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       sendJson(res, 200, await compilePage(await project(), url.searchParams.get("route") ?? ""));
     } else if (pathname.startsWith(FILES_PREFIX)) {
       await serveFile(
+        req,
         res,
         (await project()).root,
         decodeURIComponent(pathname.slice(FILES_PREFIX.length)),
       );
+    } else if (pathname === FS_RPC_PATH && req.method === "POST") {
+      packageRoot = (await project()).root;
+      const body = serveFsRequest(fs, await readBodyBytes(req));
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "cache-control": "no-store",
+      });
+      res.end(body);
+    } else if (pathname === FS_FILE_PATH) {
+      packageRoot = (await project()).root;
+      const file = url.searchParams.get("path") ?? "";
+      let data: Uint8Array | undefined;
+      try {
+        data = fs.call("readFile", { path: file }).data;
+      } catch {
+        // Answered below
+      }
+      if (!data) {
+        sendJson(res, 404, { error: `${file} not found` });
+      } else {
+        const type =
+          CONTENT_TYPES[path.posix.extname(file).toLowerCase()] ?? "application/octet-stream";
+        sendBytes(req, res, data, {
+          "content-type": type,
+          "cache-control": "no-cache",
+          "content-security-policy": "sandbox",
+        });
+      }
     } else if (pathname === REQUEST_PROXY_PATH && req.method === "POST") {
-      sendJson(
-        res,
-        200,
-        await proxyRequest(JSON.parse(await readBody(req)) as ProxyRequest, usedCodes),
-      );
+      const request = JSON.parse(await readBody(req)) as ProxyRequest;
+      // A request the logic layer gave up on, such as after a timeout, is not finished upstream
+      const controller = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) controller.abort();
+      });
+      await proxyRequest(request, usedCodes, res, controller.signal);
     } else if (pathname.startsWith(`${WECHAT_API_PREFIX}/`)) {
       const target = new URL(
         pathname.slice(WECHAT_API_PREFIX.length) + url.search,
@@ -216,29 +275,56 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
   };
 }
 
-interface ProxyRequest {
-  url: string;
-  method: string;
-  header: Record<string, string>;
-  body?: string;
-}
-
-/** Performs `wx.request` for the logic layer, which cannot make cross-origin requests from the browser. */
-async function proxyRequest(request: ProxyRequest, usedCodes: Set<string>) {
+/**
+ * Performs `wx.request`, `wx.downloadFile` and `wx.uploadFile` for the logic
+ * layer, which cannot make cross-origin requests from the browser. Binary
+ * bodies travel as base64; a streamed request gets the body as is, with its
+ * status and headers in a response header.
+ */
+async function proxyRequest(
+  request: ProxyRequest,
+  usedCodes: Set<string>,
+  res: ServerResponse,
+  signal: AbortSignal,
+): Promise<void> {
+  const answer = (head: Omit<ProxyResponse, "body" | "bodyEncoding">, body: Buffer) => {
+    if (request.stream) {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "cache-control": "no-store",
+        [PROXY_HEAD_HEADER]: encodeURIComponent(JSON.stringify(head)),
+      });
+      res.end(body);
+    } else if (request.responseType === "arraybuffer") {
+      sendJson(res, 200, { ...head, body: body.toString("base64"), bodyEncoding: "base64" });
+    } else {
+      sendJson(res, 200, { ...head, body: body.toString("utf8") });
+    }
+  };
+  const body =
+    request.body === undefined
+      ? undefined
+      : request.bodyEncoding === "base64"
+        ? Buffer.from(request.body, "base64")
+        : request.body;
   try {
     const target = new URL(request.url);
     // A Mini Program cannot call WeChat server APIs itself, but a demo may; answer with the mock
     if (target.host === WECHAT_API_HOST) {
       const mocked = mockWechatApi(
-        { method: request.method, url: target, body: request.body },
+        { method: request.method, url: target, body: body?.toString() },
         usedCodes,
       );
       if (mocked) {
-        return {
-          statusCode: mocked.status,
-          header: { "content-type": "application/json" },
-          body: JSON.stringify(mocked.json),
-        };
+        answer(
+          {
+            statusCode: mocked.status,
+            header: { "content-type": "application/json" },
+            cookies: [],
+          },
+          Buffer.from(JSON.stringify(mocked.json)),
+        );
+        return;
       }
     }
     const headers = Object.fromEntries(
@@ -249,20 +335,125 @@ async function proxyRequest(request: ProxyRequest, usedCodes: Set<string>) {
     const response = await fetch(target, {
       method: request.method,
       headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+      signal,
     });
-    return {
+    const head = {
       statusCode: response.status,
       header: Object.fromEntries(response.headers),
-      body: await response.text(),
+      cookies: response.headers.getSetCookie(),
     };
+    answer(head, Buffer.from(await response.arrayBuffer()));
   } catch (error) {
+    if (signal.aborted) return;
     const cause = (error as Error & { cause?: Error }).cause;
-    return { error: cause?.message ?? (error as Error).message };
+    sendJson(res, 200, { error: cause?.message ?? (error as Error).message });
   }
 }
 
-async function serveFile(res: ServerResponse, root: string, relative: string): Promise<void> {
+/**
+ * The code package files of the project, for `FileSystemManager`: read only,
+ * with the checks of `serveFile` (no leaving the root, no dot files, no
+ * symlinks out). The file system calls are synchronous, so these reads are too.
+ */
+function packageFiles(root: () => string | undefined): PackageFiles {
+  const resolve = (relative: string): string | undefined => {
+    const base = root();
+    if (!base || relative.split("/").some((part) => part.startsWith("."))) return undefined;
+    const file = path.resolve(base, relative);
+    if (file !== base && !file.startsWith(base + path.sep)) return undefined;
+    try {
+      const [realRoot, realFile] = [realpathSync(base), realpathSync(file)];
+      if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) return undefined;
+      return realFile;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    stat(relative) {
+      const file = resolve(relative);
+      if (!file) return undefined;
+      try {
+        const fd = openSync(file, "r");
+        try {
+          const stats = fstatSync(fd);
+          if (!stats.isFile() && !stats.isDirectory()) return undefined;
+          return { directory: stats.isDirectory(), size: stats.size, mtimeMs: stats.mtimeMs };
+        } finally {
+          closeSync(fd);
+        }
+      } catch {
+        return undefined;
+      }
+    },
+    read(relative) {
+      const file = resolve(relative);
+      if (!file) return undefined;
+      try {
+        // Check and read the same open file, so it cannot be swapped in between
+        const fd = openSync(file, "r");
+        try {
+          return fstatSync(fd).isFile() ? new Uint8Array(readFileSync(fd)) : undefined;
+        } finally {
+          closeSync(fd);
+        }
+      } catch {
+        return undefined;
+      }
+    },
+    list(relative) {
+      const file = resolve(relative);
+      if (!file) return undefined;
+      try {
+        return readdirSync(file).filter((name) => !name.startsWith("."));
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/**
+ * Sends a file's bytes, or the one range a `Range` header asks for, as a
+ * media element needs to seek; several ranges get the whole file.
+ */
+export function sendBytes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  body: Uint8Array,
+  headers: Record<string, string>,
+): void {
+  const size = body.byteLength;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range?.trim() ?? "");
+  if (!match || (match[1] === "" && match[2] === "")) {
+    res.writeHead(200, { ...headers, "accept-ranges": "bytes", "content-length": size });
+    res.end(body);
+    return;
+  }
+  // `bytes=-n` is the last n bytes
+  const start = match[1] === "" ? Math.max(0, size - Number(match[2])) : Number(match[1]);
+  const end = match[1] === "" || match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1);
+  if (start >= size || start > end) {
+    res.writeHead(416, { ...headers, "content-range": `bytes */${size}` });
+    res.end();
+    return;
+  }
+  res.writeHead(206, {
+    ...headers,
+    "accept-ranges": "bytes",
+    "content-range": `bytes ${start}-${end}/${size}`,
+    "content-length": end - start + 1,
+  });
+  res.end(body.subarray(start, end + 1));
+}
+
+async function serveFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  root: string,
+  relative: string,
+): Promise<void> {
   const file = path.resolve(root, relative);
   const inside = file.startsWith(root + path.sep);
   if (!inside || relative.split("/").some((part) => part.startsWith("."))) {
@@ -287,24 +478,29 @@ async function serveFile(res: ServerResponse, root: string, relative: string): P
     }
     const type = CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
     // Opened as a document, such as an SVG with script, a project file runs in a sandbox, not as the simulator
-    res.writeHead(200, {
+    sendBytes(req, res, body, {
       "content-type": type,
       "cache-control": "no-cache",
       "content-security-policy": "sandbox",
+      // The page's sandboxed iframe has an opaque origin; fonts of @font-face need CORS
+      "access-control-allow-origin": "*",
     });
-    res.end(body);
   } catch {
     sendJson(res, 404, { error: `${relative} not found` });
   }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBodyBytes(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  return (await readBodyBytes(req)).toString("utf8");
 }
 
 function send(res: ServerResponse, status: number, type: string, body: string): void {

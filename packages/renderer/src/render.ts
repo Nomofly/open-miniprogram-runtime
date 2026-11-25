@@ -49,6 +49,8 @@ export interface RenderScope {
   data: Record<string, unknown>;
   /** Maps the `class` value written in this scope's template to the classes the element gets. */
   transformClass(value: string): string;
+  /** For a component with `componentGenerics`: the component path each generic tag renders. */
+  generics?: Record<string, string>;
 }
 
 export interface RenderEnv {
@@ -68,14 +70,19 @@ interface Context {
   data: Record<string, unknown>;
   /** `wx:for` item and index variables. */
   vars?: Map<string, unknown>;
+  /** How many templates and includes this node is rendered inside. */
+  depth: number;
 }
+
+/** Deeper than this, a template or include is taken to render itself without end. */
+const MAX_DEPTH = 64;
 
 /** Renders a page or component scope. */
 export function renderScope(scope: RenderScope, env: RenderEnv): VNode[] {
   const file = env.bundle.files[scope.def.template];
   if (!file) return [];
   const out: VNode[] = [];
-  renderNodes(file.nodes, { scope, file, data: scope.data }, "", out, env);
+  renderNodes(file.nodes, { scope, file, data: scope.data, depth: 0 }, "", out, env);
   return out;
 }
 
@@ -126,7 +133,8 @@ function renderNodes(
       }
       case "include": {
         const file = env.bundle.files[node.src];
-        if (file) renderNodes(file.nodes, { ...ctx, file }, `${key}/`, out, env);
+        if (!file || tooDeep(ctx, node.src)) break;
+        renderNodes(file.nodes, { ...ctx, file, depth: ctx.depth + 1 }, `${key}/`, out, env);
         break;
       }
       case "template": {
@@ -136,6 +144,7 @@ function renderNodes(
           if (name) console.warn(`[omr] template "${name}" is not defined in ${ctx.file.path}`);
           break;
         }
+        if (tooDeep(ctx, `template "${name}"`)) break;
         const data = node.data === undefined ? {} : evaluateValue(node.data, lookup);
         renderNodes(
           found.nodes,
@@ -143,6 +152,7 @@ function renderNodes(
             scope: ctx.scope,
             file: found.file,
             data: data && typeof data === "object" ? (data as Record<string, unknown>) : {},
+            depth: ctx.depth + 1,
           },
           `${key}=${name}/`,
           out,
@@ -157,12 +167,21 @@ function renderNodes(
   }
 }
 
+function tooDeep(ctx: Context, what: string): boolean {
+  if (ctx.depth < MAX_DEPTH) return false;
+  console.warn(`[omr] ${what} in ${ctx.file.path} is nested ${MAX_DEPTH} deep; it renders itself`);
+  return true;
+}
+
 /** Templates visible in a file: its own and those of the files it imports, but not their imports. */
 function findTemplate(name: string, file: WxmlFile, bundle: WebviewBundle) {
-  if (file.templates[name]) return { nodes: file.templates[name]!, file };
+  // The bundle comes through JSON, so `templates` inherits from Object.prototype again
+  if (Object.hasOwn(file.templates, name)) return { nodes: file.templates[name]!, file };
   for (const imported of file.imports) {
     const target = bundle.files[imported];
-    if (target?.templates[name]) return { nodes: target.templates[name]!, file: target };
+    if (target && Object.hasOwn(target.templates, name)) {
+      return { nodes: target.templates[name]!, file: target };
+    }
   }
   return undefined;
 }
@@ -216,7 +235,7 @@ function renderElement(
 
   const raw: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(node.attrs)) raw[name] = evaluateValue(value, lookup);
-  const componentPath = scope.def.usingComponents[node.tag];
+  const componentPath = scope.def.usingComponents[node.tag] ?? scope.generics?.[node.tag];
   const attrs: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(raw)) {
     if (componentPath && !HOST_DOM_ATTRIBUTES.has(name) && !name.startsWith("data-")) continue;

@@ -1,0 +1,402 @@
+/**
+ * `<editor>`: an editable rich text area. `EditorContext` drives it through
+ * `omrCall`; its content model lives in `editor-model.ts`.
+ */
+import { fsFileUrl, isFsPath } from "@omr/runtime";
+import { toText as stringOf } from "../expression.ts";
+import { Builtin, emit } from "./base.ts";
+import {
+  applyFormat,
+  clampRange,
+  emptyItems,
+  formatsAt,
+  fromDelta,
+  inlineFormats,
+  locate,
+  readHtml,
+  removeFormats,
+  replaceRange,
+  textItems,
+  toDelta,
+  toHtml,
+  toText,
+  type Formats,
+  type Item,
+  type Value,
+} from "./editor-model.ts";
+
+interface Range {
+  index: number;
+  length: number;
+}
+
+interface Snapshot {
+  html: string;
+  range: Range;
+}
+
+/** How many changes `undo` goes back. */
+const HISTORY_LIMIT = 100;
+/** Typing within this time of the last keystroke is undone together. */
+const TYPING_GROUP_MS = 1000;
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The editing area is light DOM with Quill's class, `ql-editor`, which pages style. */
+export class WxEditor extends Builtin {
+  private area?: HTMLElement;
+  /** The selection the last time it was in the editor; context methods use it after a blur. */
+  private range: Range = { index: 0, length: 0 };
+  /** Character formats set at a cursor, for the next typed text; null removes one. */
+  private pending: Record<string, Value | null> = {};
+  private undoStack: Snapshot[] = [];
+  private redoStack: Snapshot[] = [];
+  private lastTyping = 0;
+  private lastStatus = "";
+  /**
+   * Where an image source is shown from. The view sets it to resolve package
+   * paths against the caller's template, as `<image>` does.
+   */
+  omrResolveAsset: (src: string) => string = (src) => (isFsPath(src) ? fsFileUrl(src) : src);
+
+  connectedCallback(): void {
+    if (this.area) return;
+    const area = document.createElement("div");
+    area.className = "ql-editor";
+    area.setAttribute("role", "textbox");
+    area.setAttribute("aria-multiline", "true");
+    area.innerHTML = "<p><br></p>";
+    this.area = area;
+    this.prepend(area);
+    area.addEventListener("focus", () => emit(this, "focus", this.contents()));
+    area.addEventListener("blur", () => emit(this, "blur", this.contents()));
+    area.addEventListener("beforeinput", (event) => this.beforeInput(event));
+    area.addEventListener("input", () => {
+      this.syncEmpty();
+      emit(this, "input", this.contents());
+    });
+    area.addEventListener("keydown", (event) => {
+      if (!(event.ctrlKey || event.metaKey) || area.contentEditable !== "true") return;
+      const key = event.key.toLowerCase();
+      if (key === "z" || key === "y") {
+        event.preventDefault();
+        if (key === "y" || event.shiftKey) this.redo();
+        else this.undo();
+      }
+    });
+    // Only plain text is pasted
+    area.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text) this.insertText(text);
+    });
+    document.addEventListener("selectionchange", () => this.selectionChanged());
+    this.update();
+    setTimeout(() => emit(this, "ready"), 0);
+  }
+
+  protected override update(): void {
+    const area = this.area;
+    if (!area) return;
+    area.contentEditable = this.flag("read-only") ? "false" : "true";
+    area.dataset.placeholder = this.str("placeholder");
+    area.enterKeyHint = this.str("enterkeyhint", "enter");
+    this.syncEmpty();
+  }
+
+  omrCall(method: string, args: unknown[]): Record<string, unknown> {
+    const options = isObject(args[0]) ? args[0] : {};
+    switch (method) {
+      case "format":
+        this.format(stringOf(args[0]), args[1]);
+        return {};
+      case "removeFormat":
+        this.edit((items, range) => ({
+          items: removeFormats(items, range.index, range.length),
+          range,
+        }));
+        this.pending = {};
+        this.emitStatus(true);
+        return {};
+      case "insertText":
+        this.insertText(stringOf(options.text));
+        return {};
+      case "insertImage":
+        this.insertImage(options);
+        return {};
+      case "insertDivider":
+        this.edit((items, range) => {
+          const removed = replaceRange(items, range.index, range.length, []);
+          const before = removed[range.index - 1];
+          // A divider is a line of its own: the text before the cursor keeps its line
+          const inserted: Item[] =
+            before && before.kind !== "line" && before.kind !== "divider"
+              ? [{ kind: "line", formats: {} }, { kind: "divider" }]
+              : [{ kind: "divider" }];
+          const next = replaceRange(removed, range.index, 0, inserted);
+          return { items: next, range: { index: range.index + inserted.length, length: 0 } };
+        });
+        return {};
+      case "setContents": {
+        let items: Item[];
+        if (options.delta !== undefined && options.delta !== null) items = fromDelta(options.delta);
+        else if (typeof options.html === "string") {
+          const template = document.createElement("template");
+          template.innerHTML = options.html;
+          items = readHtml(template.content).items;
+        } else items = emptyItems();
+        this.replaceAll(items);
+        return {};
+      }
+      case "clear":
+        this.replaceAll(emptyItems());
+        return {};
+      case "getContents":
+        return this.contents();
+      case "getSelectionText": {
+        // Empty when the editor is not focused, as the documentation says
+        if (document.activeElement !== this.area) return { text: "" };
+        const { items, selection } = this.read();
+        const range = selection ?? this.range;
+        return { text: toText(items.slice(range.index, range.index + range.length)) };
+      }
+      case "undo":
+        this.undo();
+        return {};
+      case "redo":
+        this.redo();
+        return {};
+      case "blur": {
+        const selection = document.getSelection();
+        if (selection?.anchorNode && this.area!.contains(selection.anchorNode)) {
+          selection.removeAllRanges();
+        }
+        this.area!.blur();
+        return {};
+      }
+      case "scrollIntoView": {
+        const { node } = locate(this.area!, this.range.index + this.range.length);
+        const element = node instanceof Element ? node : (node as Node).parentElement;
+        element?.scrollIntoView({ block: "nearest" });
+        return {};
+      }
+    }
+    throw new Error(`${method} is not supported`);
+  }
+
+  private format(name: string, value: unknown): void {
+    const { items, selection } = this.read();
+    const range = clampRange(items, ...rangeArgs(selection ?? this.range));
+    const result = applyFormat(items, range.index, range.length, name, value, this.pending);
+    this.pending = result.pending;
+    if (result.items !== items) {
+      this.remember();
+      this.render(result.items, range, true);
+      emit(this, "input", this.contents());
+    } else this.select(range, true);
+    this.emitStatus(true);
+  }
+
+  private insertText(text: string): void {
+    const pending = this.pending;
+    this.edit((items, range) => {
+      const formats = inlineFormats(formatsAt(items, range.index, 0), pending);
+      const inserted = textItems(text, formats);
+      return {
+        items: replaceRange(items, range.index, range.length, inserted),
+        range: { index: range.index + inserted.length, length: 0 },
+      };
+    });
+    this.pending = {};
+  }
+
+  private insertImage(options: Record<string, unknown>): void {
+    if (typeof options.src !== "string" || options.src === "") {
+      throw new Error("parameter error: parameter.src should be String");
+    }
+    const src = options.src;
+    const props: Record<string, string> = {};
+    for (const [name, key] of [
+      ["alt", "alt"],
+      ["width", "width"],
+      ["height", "height"],
+      ["class", "extClass"],
+    ] as const) {
+      if (options[key] !== undefined && options[key] !== "") props[name] = stringOf(options[key]);
+    }
+    if (isObject(options.data)) {
+      props["data-custom"] = Object.entries(options.data)
+        .map(([name, value]) => `${name}=${String(value)}`)
+        .join(";");
+    }
+    // Temporary files are marked, so the page can upload them before it submits the html
+    if (isFsPath(src)) props["data-local"] = src;
+    this.edit((items, range) => {
+      const inserted: Item[] = [{ kind: "image", src, props, formats: {} }];
+      if (!options.nowrap) inserted.push({ kind: "line", formats: {} });
+      return {
+        items: replaceRange(items, range.index, range.length, inserted),
+        range: { index: range.index + inserted.length, length: 0 },
+      };
+    });
+  }
+
+  /** `setContents` and `clear`: the cursor goes to the end, and the editor keeps its focus state. */
+  private replaceAll(items: Item[]): void {
+    this.remember();
+    this.pending = {};
+    this.render(items, { index: items.length - 1, length: 0 }, false);
+    emit(this, "input", this.contents());
+  }
+
+  /** Applies a change at the selection and records it for `undo`; context edits focus the editor. */
+  private edit(change: (items: Item[], range: Range) => { items: Item[]; range: Range }): void {
+    const { items, selection } = this.read();
+    const range = clampRange(items, ...rangeArgs(selection ?? this.range));
+    const result = change(items, range);
+    this.remember();
+    this.render(result.items, result.range, true);
+    emit(this, "input", this.contents());
+  }
+
+  /** The content, and the selection when it is in the editor. */
+  private read(): { items: Item[]; selection?: Range } {
+    const area = this.area!;
+    const selection = document.getSelection();
+    const points = [];
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (area.contains(range.startContainer) && area.contains(range.endContainer)) {
+        points.push(
+          { node: range.startContainer, offset: range.startOffset },
+          { node: range.endContainer, offset: range.endOffset },
+        );
+      }
+    }
+    const { items, positions } = readHtml(area, points);
+    const [start, end] = positions;
+    return {
+      items,
+      selection:
+        start === undefined || end === undefined
+          ? undefined
+          : { index: Math.min(start, end), length: Math.abs(end - start) },
+    };
+  }
+
+  private render(items: Item[], range: Range, focus: boolean): void {
+    this.area!.innerHTML = toHtml(items, { imageUrl: (src) => this.omrResolveAsset(src) });
+    this.syncEmpty();
+    this.select(clampRange(items, range.index, range.length), focus);
+  }
+
+  /** Remembers a selection, and shows it when the editor is focused or `focus` asks for it. */
+  private select(range: Range, focus: boolean): void {
+    const area = this.area!;
+    this.range = range;
+    if (focus && document.activeElement !== area && area.contentEditable === "true") {
+      area.focus({ preventScroll: true });
+    }
+    if (document.activeElement !== area) return;
+    const start = locate(area, range.index);
+    const end = locate(area, range.index + range.length);
+    const dom = document.createRange();
+    dom.setStart(start.node as Node, start.offset);
+    dom.setEnd(end.node as Node, end.offset);
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(dom);
+  }
+
+  private selectionChanged(): void {
+    const area = this.area;
+    const selection = document.getSelection();
+    if (!area || !this.isConnected || !selection?.anchorNode) return;
+    if (!area.contains(selection.anchorNode)) return;
+    const { selection: range } = this.read();
+    if (!range) return;
+    if (range.index !== this.range.index || range.length !== this.range.length) {
+      this.range = range;
+      this.pending = {};
+    }
+    this.emitStatus(false);
+  }
+
+  /** `bindstatuschange`: the formats of the selection, after a context change or when they differ. */
+  private emitStatus(force: boolean): void {
+    const { items, selection } = this.read();
+    const range = selection ?? this.range;
+    const formats: Formats = formatsAt(items, range.index, range.length);
+    for (const [name, value] of Object.entries(this.pending)) {
+      if (value === null) delete formats[name];
+      else formats[name] = value;
+    }
+    const key = JSON.stringify(formats);
+    if (!force && key === this.lastStatus) return;
+    this.lastStatus = key;
+    emit(this, "statuschange", formats);
+  }
+
+  private beforeInput(event: InputEvent): void {
+    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+      event.preventDefault();
+      if (event.inputType === "historyUndo") this.undo();
+      else this.redo();
+      return;
+    }
+    if (event.inputType === "insertFromPaste") return;
+    // Text typed after a format set at the cursor takes that format
+    if (event.inputType === "insertText" && event.data && Object.keys(this.pending).length > 0) {
+      event.preventDefault();
+      this.insertText(event.data);
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastTyping > TYPING_GROUP_MS) this.remember();
+    this.lastTyping = now;
+  }
+
+  private remember(): void {
+    this.undoStack.push({ html: this.area!.innerHTML, range: { ...this.range } });
+    if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+    this.redoStack = [];
+  }
+
+  private undo(): void {
+    this.restore(this.undoStack, this.redoStack);
+  }
+
+  private redo(): void {
+    this.restore(this.redoStack, this.undoStack);
+  }
+
+  private restore(from: Snapshot[], to: Snapshot[]): void {
+    const snapshot = from.pop();
+    if (!snapshot) return;
+    const area = this.area!;
+    to.push({ html: area.innerHTML, range: { ...this.range } });
+    area.innerHTML = snapshot.html;
+    this.lastTyping = 0;
+    this.pending = {};
+    this.syncEmpty();
+    this.select(snapshot.range, false);
+    emit(this, "input", this.contents());
+  }
+
+  private syncEmpty(): void {
+    const area = this.area!;
+    area.classList.toggle(
+      "ql-blank",
+      (area.textContent ?? "") === "" && !area.querySelector("img, hr"),
+    );
+  }
+
+  /** What `getContents` returns, and the detail of focus, blur and input. */
+  private contents(): Record<string, unknown> {
+    const { items } = this.read();
+    return { html: toHtml(items), text: toText(items), delta: toDelta(items) };
+  }
+}
+
+const rangeArgs = (range: Range) => [range.index, range.length] as const;
