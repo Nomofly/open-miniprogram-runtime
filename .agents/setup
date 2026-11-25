@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb. Amp snapshots the result, so new orbs start with Vite+,
+# Node.js and node_modules already installed.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() {
+  local start=$SECONDS
+  echo "==> $1"
+  shift
+  "$@"
+  echo "    done in $((SECONDS - start))s"
+}
+
+install_vp() {
+  if [ -x "$HOME/.local/share/vite-plus/bin/vp" ]; then
+    echo "    Vite+ is already installed"
+    return
+  fi
+  # CI and VP_NODE_MANAGER skip the installer's interactive prompts. It adds
+  # Vite+ to ~/.bashrc, ~/.profile and ~/.bash_profile itself.
+  curl -fsSL https://vite.plus | CI=1 VP_NODE_MANAGER=yes bash
+}
+
+step "Install Vite+" install_vp
+
+# The installer cannot change this running script's environment.
+# shellcheck disable=SC1091
+. "$HOME/.config/vite-plus/env"
+
+step "Install dependencies" vp install --frozen-lockfile

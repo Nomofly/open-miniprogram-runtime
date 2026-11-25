@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Runs each time an Amp orb starts or wakes. Keep it fast.
+set -euo pipefail
+
+# Oxlint's JS plugin reserves a large block of virtual memory and panics in
+# vp check without overcommit. Snapshots do not keep kernel settings.
+sudo sysctl -qw vm.overcommit_memory=1
