@@ -46,8 +46,10 @@ export function mockWechatApi(
     if (appid && appid !== payload.appid) {
       return { error: { errcode: 40013, errmsg: "invalid appid" } };
     }
-    if (usedCodes.has(code)) return { error: { errcode: 40163, errmsg: "code been used" } };
-    usedCodes.add(code);
+    // Keyed by what the code stands for, so another base64 spelling of it is still used
+    const id = `${payload.kind}:${payload.issuedAt}:${payload.nonce}`;
+    if (usedCodes.has(id)) return { error: { errcode: 40163, errmsg: "code been used" } };
+    usedCodes.add(id);
     return { payload };
   };
 

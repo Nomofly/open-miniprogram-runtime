@@ -111,12 +111,12 @@ describe("logic layer", () => {
     expect(result!.errMsg).toBe("login:ok");
 
     const used = new Set<string>();
-    const exchange = (appid: string) =>
+    const exchange = (appid: string, code = result!.code) =>
       mockWechatApi(
         {
           method: "GET",
           url: new URL(
-            `https://api.weixin.qq.com/sns/jscode2session?appid=${appid}&secret=x&js_code=${result!.code}&grant_type=authorization_code`,
+            `https://api.weixin.qq.com/sns/jscode2session?appid=${appid}&secret=x&js_code=${encodeURIComponent(code)}&grant_type=authorization_code`,
           ),
         },
         used,
@@ -128,6 +128,8 @@ describe("logic layer", () => {
       session_key: "omr-session-key-developer",
     });
     expect(exchange("wx0123456789abcdef")).toMatchObject({ errcode: 40163 });
+    // Base64 ignores whitespace: the same code spelled differently is still used
+    expect(exchange("wx0123456789abcdef", `${result!.code} `)).toMatchObject({ errcode: 40163 });
   });
 
   test("checkSession fails for an expired session until wx.login runs", async () => {
@@ -449,6 +451,31 @@ describe("logic layer", () => {
     await settle();
     // screenHeight 667, navigation bar 64, tab bar 50
     expect(log()).toEqual([553, 667, 0]);
+  });
+
+  test("a selector query takes its reply only from its own WebView, and finds nothing once that WebView closes", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/a/a.js": `Page({ onLoad() { wx.navigateTo({ url: "/pages/b/b" }); } });`,
+        "pages/b/b.js": `Page({ onLoad() {
+          wx.createSelectorQuery().select("#x").boundingClientRect().exec((r) => getApp().log.push(r));
+        } });`,
+      },
+      { pages: ["pages/a/a", "pages/b/b"] },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    view(2, { type: "ready" });
+    await settle();
+    const [query] = toView(sent, "query") as { queryId: number }[];
+    view(1, { type: "queryResult", queryId: query!.queryId, results: [{ forged: true }] });
+    await settle();
+    expect(log()).toEqual([]);
+
+    (globalThis as unknown as { wx: { navigateBack(): void } }).wx.navigateBack();
+    for (let i = 0; i < 3; i++) await settle();
+    expect(log()).toEqual([[null]]);
   });
 
   test("navigateTo hides the opener, navigateBack unloads the top page, and tab pages refuse navigateTo", async () => {

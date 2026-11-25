@@ -163,8 +163,9 @@ class WxIcon extends Builtin {
   protected override update(): void {
     const icon = ICONS[this.str("type")];
     const size = this.num("size", 23);
-    const color = this.str("color") || icon?.color || "#000";
-    this.root.innerHTML = `<style>:host { display: inline-block; font-size: 0; line-height: 0; vertical-align: middle; } svg { display: block; }</style><svg viewBox="0 0 24 24" width="${size}" height="${size}">${icon?.svg.replaceAll('"C"', `"${color}"`) ?? ""}</svg>`;
+    // The colour is set through the DOM, so a template value cannot add markup
+    this.root.innerHTML = `<style>:host { display: inline-block; font-size: 0; line-height: 0; vertical-align: middle; } svg { display: block; }</style><svg viewBox="0 0 24 24" width="${size}" height="${size}">${icon?.svg.replaceAll('"C"', '"currentColor"') ?? ""}</svg>`;
+    this.root.querySelector("svg")!.style.color = this.str("color") || icon?.color || "#000";
   }
 }
 
@@ -650,11 +651,14 @@ class WxSwiper extends Builtin {
     this.dots.hidden = !this.flag("indicator-dots");
     const color = this.str("indicator-color", "rgba(0, 0, 0, 0.3)");
     const active = this.str("indicator-active-color", "#000000");
-    this.dots.innerHTML = Array.from(
-      { length: count },
-      (_, index) =>
-        `<span class="dot" style="background:${index === this.current ? active : color}"></span>`,
-    ).join("");
+    this.dots.replaceChildren(
+      ...Array.from({ length: count }, (_, index) => {
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        dot.style.background = index === this.current ? active : color;
+        return dot;
+      }),
+    );
   }
 }
 
@@ -759,6 +763,11 @@ class WxPicker extends Builtin {
   }
 }
 
+/** Whether a URL runs script; browsers drop tabs, newlines and leading control characters before reading the scheme. */
+const isScriptUrl = (value: string) =>
+  // oxlint-disable-next-line no-control-regex -- control characters are what this removes
+  /^javascript:/i.test(value.replace(/[\u0000-\u0020\u007f]/g, ""));
+
 const ALLOWED_RICH_TEXT_TAGS = new Set(
   "a abbr address article aside b bdi bdo big blockquote br caption center cite code col colgroup dd del div dl dt em fieldset font footer h1 h2 h3 h4 h5 h6 header hr i img ins label legend li mark nav ol p pre q rt ruby s section small span strong sub sup table tbody td tfoot th thead tr tt u ul".split(
     " ",
@@ -792,7 +801,7 @@ function sanitize(nodes: Node[]): Node[] {
     if (!ALLOWED_RICH_TEXT_TAGS.has(tag)) return [];
     const el = document.createElement(tag);
     for (const attr of node.attributes) {
-      if (/^on/i.test(attr.name) || /^\s*javascript:/i.test(attr.value)) continue;
+      if (/^on/i.test(attr.name) || isScriptUrl(attr.value)) continue;
       el.setAttribute(attr.name, attr.value);
     }
     el.append(...sanitize([...node.childNodes]));
@@ -808,7 +817,7 @@ function buildRichNode(node: unknown): Node[] {
   if (!ALLOWED_RICH_TEXT_TAGS.has(tag)) return [];
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries((attrs as Record<string, unknown>) ?? {})) {
-    if (/^on/i.test(key) || /^\s*javascript:/i.test(toText(value))) continue;
+    if (/^on/i.test(key) || isScriptUrl(toText(value))) continue;
     try {
       el.setAttribute(key, toText(value));
     } catch {

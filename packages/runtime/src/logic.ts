@@ -81,7 +81,11 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
   let uiCallId = 0;
   const uiPending = new Map<number, { resolve: AnyFunction; reject: AnyFunction }>();
   let queryId = 0;
-  const queryPending = new Map<number, (results: unknown[]) => void>();
+  /** Selector queries waiting for their WebView's reply, with the WebView asked. */
+  const queryPending = new Map<
+    number,
+    { webviewId: number; resolve: (results: unknown[]) => void; count: number }
+  >();
   let wxApi: ReturnType<typeof createWx> | undefined;
 
   // Module system for the bundle from the compiler's compileAppService
@@ -435,6 +439,12 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
     record.components.clear();
     pages.delete(record.webviewId);
     wxApi?.releasePage(record.webviewId);
+    // A query the page started will get no reply now; it finds nothing
+    for (const [id, pending] of queryPending) {
+      if (pending.webviewId !== record.webviewId) continue;
+      queryPending.delete(id);
+      pending.resolve(Array.from({ length: pending.count }, () => null));
+    }
   };
 
   const emitRoute = (openType: string) => {
@@ -682,10 +692,14 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
       case "reachBottom":
         callHook(record.instance, "onReachBottom");
         break;
-      case "queryResult":
-        queryPending.get(message.queryId)?.(message.results);
+      case "queryResult": {
+        // Only the WebView that was asked may answer
+        const pending = queryPending.get(message.queryId);
+        if (pending?.webviewId !== record.webviewId) break;
         queryPending.delete(message.queryId);
+        pending.resolve(message.results);
         break;
+      }
     }
   };
 
@@ -738,7 +752,7 @@ export function startLogic(post: (message: LogicToShell) => void): (message: She
             return;
           }
           const id = ++queryId;
-          queryPending.set(id, resolve);
+          queryPending.set(id, { webviewId, resolve, count: requests.length });
           sendView(record, { type: "query", queryId: id, requests });
         }),
       sendView: (webviewId, viewMessage) => {

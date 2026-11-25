@@ -104,7 +104,8 @@ const IN_USE_ICONS: Record<PermissionKind, string> = {
   record: `<rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
   camera: `<path fill-rule="evenodd" d="M4 7h3l2-2h6l2 2h3v12H4zM12 9.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z" fill="currentColor"/>`,
 };
-function showPermissionsInUse(kinds: PermissionKind[]): void {
+function showPermissionsInUse(reported: PermissionKind[]): void {
+  const kinds = reported.filter((kind) => Object.hasOwn(IN_USE_ICONS, kind));
   capsuleMenu.dataset.inUse = kinds.join(" ");
   capsuleMenu.innerHTML = kinds.length
     ? kinds
