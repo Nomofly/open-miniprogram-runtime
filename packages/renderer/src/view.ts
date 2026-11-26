@@ -454,12 +454,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     if (scope === page && bundle.customTabBar) keepClearOfTabBar((vnodes.at(-1) as VElement).el!);
   };
 
-  // The custom tab bar sits over the bottom of the window; the page ends above it
+  // The custom tab bar sits over the bottom of the window; the page ends above it. The room is
+  // kept on the root element, as `<page-meta page-style>` replaces the body's style
   let tabBarObserver: ResizeObserver | undefined;
   const keepClearOfTabBar = (host: HTMLElement) => {
     if (tabBarObserver) return;
     tabBarObserver = new ResizeObserver(() => {
-      document.body.style.paddingBottom = `${host.offsetHeight}px`;
+      document.documentElement.style.paddingBottom = `${host.offsetHeight}px`;
     });
     tabBarObserver.observe(host);
   };

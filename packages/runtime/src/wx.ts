@@ -1000,6 +1000,7 @@ export function createWx(host: WxHost) {
         webviewId: currentWebview(),
         frontColor: options.frontColor,
         backgroundColor: options.backgroundColor,
+        animation: options.animation,
       }),
     ),
     pageScrollTo: asyncApi("pageScrollTo", async (options) => {

@@ -427,6 +427,14 @@ function onRoute(message: Extract<LogicToShell, { type: "route" }>): void {
   document.documentElement.dataset.omrRoute = top.route;
 }
 
+/** The CSS easings of `wx.setNavigationBarColor`'s `animation.timingFunc`. */
+const NAVIGATION_BAR_EASINGS: Record<string, string> = {
+  linear: "linear",
+  easeIn: "ease-in",
+  easeOut: "ease-out",
+  easeInOut: "ease-in-out",
+};
+
 async function onUi(message: Extract<LogicToShell, { type: "ui" }>): Promise<void> {
   try {
     let result: Record<string, unknown> = {};
@@ -437,6 +445,15 @@ async function onUi(message: Extract<LogicToShell, { type: "ui" }>): Promise<voi
         if (message.name === "setNavigationBarTitle")
           page.changes.navigationBarTitleText = args.title;
         else {
+          // `animation` fades the bar to its new colors
+          const animation = (args.animation ?? {}) as { duration?: unknown; timingFunc?: unknown };
+          const duration = Number(animation.duration) || 0;
+          const easing =
+            NAVIGATION_BAR_EASINGS[String(animation.timingFunc)] ?? NAVIGATION_BAR_EASINGS.linear;
+          page.navbar.style.transition =
+            duration > 0
+              ? `background-color ${duration}ms ${easing}, color ${duration}ms ${easing}`
+              : "";
           page.changes.navigationBarBackgroundColor = args.backgroundColor;
           page.changes.navigationBarTextStyle = args.frontColor === "#ffffff" ? "white" : "black";
         }

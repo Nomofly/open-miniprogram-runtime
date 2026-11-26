@@ -361,6 +361,10 @@ export function startLogic(
       show("setNavigationBarColor", {
         frontColor: attributes["front-color"],
         backgroundColor: attributes["background-color"],
+        animation: {
+          duration: Number(attributes["color-animation-duration"]) || 0,
+          timingFunc: attributes["color-animation-timing-func"] ?? "linear",
+        },
       });
     }
     if (attributes.loading !== undefined) {
