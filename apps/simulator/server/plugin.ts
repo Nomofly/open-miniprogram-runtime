@@ -30,6 +30,7 @@ import {
   type SimulatorConfig,
 } from "@omr/runtime";
 import { build, type Plugin, type Rolldown, type ViteDevServer } from "vite-plus";
+import { createWebViewProxies } from "./web-view-proxy.ts";
 
 export interface SimulatorPluginOptions {
   /** The Mini Program project directory. */
@@ -38,9 +39,12 @@ export interface SimulatorPluginOptions {
 
 /** Where the mock WeChat server API is served; a backend uses it in place of https://api.weixin.qq.com. */
 export const WECHAT_API_PREFIX = "/__omr/wechat-api";
+/** Answers where the shell opens a `<web-view>` page: `{ port, path }` of the proxy for `url`. */
+const WEB_VIEW_PROXY_PATH = "/__omr/web-view";
 const FILES_PREFIX = "/__omr/files/";
 const WECHAT_API_HOST = "api.weixin.qq.com";
 const WEBVIEW_ENTRY = path.join(import.meta.dirname, "../src/webview.ts");
+const BRIDGE_ENTRY = path.join(import.meta.dirname, "../src/web-view-bridge.ts");
 
 /**
  * The page of a WebView. It runs in a sandboxed iframe with an opaque origin,
@@ -58,23 +62,35 @@ const WEBVIEW_HTML = `<!doctype html>
 </html>
 `;
 
-/** Bundles the view layer into one classic script. */
-async function bundleWebview(): Promise<string> {
+/** Bundles a browser entry, such as the view layer, into one classic script. */
+async function bundleScript(entry: string, sourcemap: boolean): Promise<string> {
+  const name = path.basename(entry, ".ts");
   const result = await build({
     configFile: false,
     logLevel: "silent",
-    root: path.dirname(WEBVIEW_ENTRY),
+    root: path.dirname(entry),
     build: {
       write: false,
       minify: false,
-      sourcemap: "inline",
-      lib: { entry: WEBVIEW_ENTRY, formats: ["iife"], name: "omrWebview", fileName: "webview" },
+      sourcemap: sourcemap ? "inline" : false,
+      lib: { entry, formats: ["iife"], name: "omr", fileName: name },
     },
   });
   const outputs = (Array.isArray(result) ? result : [result]) as Rolldown.RolldownOutput[];
   const chunk = outputs.flatMap((output) => output.output).find((item) => item.type === "chunk");
-  if (!chunk || chunk.type !== "chunk") throw new Error("failed to bundle the view layer");
+  if (!chunk || chunk.type !== "chunk") throw new Error(`failed to bundle ${name}`);
   return chunk.code;
+}
+
+/** Caches a bundle until `reset`; a failed build is retried on the next call. */
+function cachedBundle(entry: string, sourcemap: boolean) {
+  let promise: Promise<string> | undefined;
+  const get = () => {
+    promise ??= bundleScript(entry, sourcemap);
+    promise.catch(() => (promise = undefined));
+    return promise;
+  };
+  return Object.assign(get, { reset: () => (promise = undefined) });
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -102,13 +118,10 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
   // One file system for the server's lifetime, like a device: user files survive page reloads
   let packageRoot: string | undefined;
   const fs = new MemoryFs({ packageFiles: packageFiles(() => packageRoot) });
-  let webviewPromise: Promise<string> | undefined;
-  const webview = () => {
-    webviewPromise ??= bundleWebview();
-    // A failed build is retried on the next request
-    webviewPromise.catch(() => (webviewPromise = undefined));
-    return webviewPromise;
-  };
+  const webview = cachedBundle(WEBVIEW_ENTRY, true);
+  // Injected inline into web pages, where an inline source map would only weigh them down
+  const bridge = cachedBundle(BRIDGE_ENTRY, false);
+  const webViewProxies = createWebViewProxies(bridge);
 
   const manifest = async (): Promise<Manifest> => {
     const loaded = await project();
@@ -157,6 +170,20 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       send(res, 200, "text/html", WEBVIEW_HTML);
     } else if (pathname === "/__omr/webview.js") {
       send(res, 200, "text/javascript", await webview());
+    } else if (pathname === WEB_VIEW_PROXY_PATH) {
+      // Where the shell opens a <web-view> page: the proxy for its origin, at the same path
+      let target: URL | undefined;
+      try {
+        target = new URL(url.searchParams.get("url") ?? "");
+      } catch {
+        // Answered below
+      }
+      if (!target || !/^https?:$/.test(target.protocol)) {
+        sendJson(res, 400, { error: "invalid url" });
+      } else {
+        const port = await webViewProxies.open(target.origin, url.searchParams.get("ua") ?? "");
+        sendJson(res, 200, { port, path: `${target.pathname}${target.search}${target.hash}` });
+      }
     } else if (pathname === "/__omr/manifest.json") {
       sendJson(res, 200, await manifest());
     } else if (pathname === "/__omr/app-service.js") {
@@ -251,9 +278,11 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
         ),
       ];
       server.watcher.add(webviewSources);
+      server.httpServer?.on("close", () => webViewProxies.close());
       server.watcher.on("change", (file) => {
         if (!webviewSources.some((dir) => file.startsWith(dir + path.sep))) return;
-        webviewPromise = undefined;
+        webview.reset();
+        bridge.reset();
         server.ws.send({ type: "full-reload" });
       });
       void project().then(

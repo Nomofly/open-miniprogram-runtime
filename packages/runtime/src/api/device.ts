@@ -44,7 +44,7 @@ export async function actionSheet(ctx: ApiContext, itemList: string[], alertText
 }
 
 /** Where the simulated user is: Tiananmen Square, as `wx.getLocation` reports by default. */
-const DEFAULT_LOCATION = {
+export const DEFAULT_LOCATION = {
   latitude: 39.908823,
   longitude: 116.39747,
   name: "天安门",

@@ -499,11 +499,45 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     reportTree();
     observers.afterRender();
     dropRemovedContainers();
+    reportWebView();
     for (const run of afterRender.splice(0)) run();
     if (pendingSeq > renderedSeq) {
       renderedSeq = pendingSeq;
       post({ type: "rendered", seq: renderedSeq });
     }
+  };
+
+  /**
+   * Tells the logic layer about the page's `<web-view>`, which the shell shows
+   * over the page: its `src` and the handlers bound to its events, when they
+   * changed. WeChat allows one per page; later ones are ignored.
+   */
+  let sentWebView = JSON.stringify({ type: "webView" });
+  const reportWebView = () => {
+    const el = document.querySelector("wx-web-view");
+    const state = el ? states.get(el) : undefined;
+    const src = state ? toText(state.props.src ?? "").trim() : "";
+    let message: Extract<ViewToLogic, { type: "webView" }> = { type: "webView" };
+    if (el && state && src) {
+      const handlers: NonNullable<typeof message.handlers> = {};
+      for (const binding of state.events) {
+        if (
+          (binding.name === "load" || binding.name === "error" || binding.name === "message") &&
+          binding.handler
+        ) {
+          handlers[binding.name] ??= { ownerId: state.ownerId, handler: binding.handler };
+        }
+      }
+      message = { type: "webView", src, target: targetOf(el), handlers };
+    }
+    // The target's offsets are not part of what changed
+    const key = JSON.stringify({
+      ...message,
+      target: message.target && { id: message.target.id, dataset: message.target.dataset },
+    });
+    if (key === sentWebView) return;
+    sentWebView = key;
+    post(message);
   };
 
   /** Tells the logic layer where each component is, when that changed. */

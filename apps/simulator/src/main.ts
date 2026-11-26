@@ -17,6 +17,7 @@ import type {
 import { DEFAULT_DEVICE, DEVICES, TAB_BAR_HEIGHT, menuButtonRect, systemInfo } from "./device.ts";
 import { createUi } from "./ui.ts";
 import type { WebviewInit } from "./webview.ts";
+import type { BridgeToShell, ShellToBridge } from "./web-view-bridge.ts";
 import "./style.css";
 
 interface TabBarConfig {
@@ -44,6 +45,8 @@ interface PageView {
   window: Record<string, unknown>;
   /** What `wx.setNavigationBar*` changed, which a theme change keeps. */
   changes: Record<string, unknown>;
+  /** The web page of the page's `<web-view>`, shown over its WebView. */
+  web?: { frame: HTMLIFrameElement; canGoBack: boolean; title: string };
 }
 
 const FILES = "/__omr/files/";
@@ -193,20 +196,74 @@ const toLogic = (message: ShellToLogic) => logic.port1.postMessage(message);
 
 function applyWindow(page: PageView): void {
   const win = page.window;
-  const custom = win.navigationStyle === "custom";
+  // navigationStyle: custom does not apply to <web-view>, as on WeChat
+  const custom = win.navigationStyle === "custom" && !page.web;
   const isTab = tabRoutes.includes(page.entry.route);
   page.navbar.hidden = custom;
   const str = (value: unknown, fallback: string) => (typeof value === "string" ? value : fallback);
   page.navbar.style.background = str(win.navigationBarBackgroundColor, "#000000");
   page.navbar.style.color = win.navigationBarTextStyle === "black" ? "#000000" : "#ffffff";
-  page.title.textContent = str(win.navigationBarTitleText, "");
+  // A web-view page shows the web page's title
+  page.title.textContent = page.web?.title || str(win.navigationBarTitleText, "");
   const top = custom ? 0 : navHeight;
   // A custom tab bar is drawn by the page itself, over the bottom of its window
   const bottom =
     isTab && !tabBarHidden && !tabBar?.custom ? TAB_BAR_HEIGHT + device.safeAreaBottom : 0;
   // An iframe does not stretch between top and bottom, so give it its height
-  page.iframe.style.top = `${top}px`;
-  page.iframe.style.height = `${device.screenHeight - top - bottom}px`;
+  for (const frame of [page.iframe, page.web?.frame]) {
+    if (!frame) continue;
+    frame.style.top = `${top}px`;
+    frame.style.height = `${device.screenHeight - top - bottom}px`;
+  }
+}
+
+/** What WeChat's web-view reports as `navigator.userAgent`, with the Mini Program's appid. */
+const wechatVersion = String(system.version);
+const webViewUserAgent =
+  device.platform === "ios"
+    ? `Mozilla/5.0 (iPhone; CPU iPhone OS ${device.system.replace(/^iOS /, "").replace(/\./g, "_")} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/${wechatVersion}(0x18003237) NetType/WIFI Language/zh_CN miniProgram/${manifest.appid}`
+    : `Mozilla/5.0 (Linux; ${device.system}; ${device.model} Build/UQ1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/122.0.6261.120 Mobile Safari/537.36 XWEB/1220099 MMWEBSDK/20240301 MMWEBID/1 MicroMessenger/${wechatVersion}.2620(0x28003237) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64 miniProgram/${manifest.appid}`;
+
+const toBridge = (page: PageView, message: ShellToBridge) =>
+  page.web?.frame.contentWindow?.postMessage(message, "*");
+
+/** Opens a `<web-view>`'s `src` over the page, through the simulator's proxy for its origin; closes it without `src`. */
+async function openWebView(page: PageView, src: string | undefined): Promise<void> {
+  page.web?.frame.remove();
+  page.web = undefined;
+  if (src) {
+    const frame = document.createElement("iframe");
+    frame.className = "omr-webview omr-web-page";
+    frame.title = src;
+    // Its own origin already keeps it from the shell; the sandbox also keeps it from navigating the shell away
+    frame.setAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads",
+    );
+    page.web = { frame, canGoBack: false, title: "" };
+    page.el.append(frame);
+    try {
+      const query = new URLSearchParams({ url: src, ua: webViewUserAgent });
+      const { port, path } = (await (await fetchOk(`/__omr/web-view?${query}`)).json()) as {
+        port: number;
+        path: string;
+      };
+      if (page.web?.frame === frame) frame.src = `http://${location.hostname}:${port}${path}`;
+    } catch {
+      // Not an http(s) URL: WeChat cannot open it either
+      if (page.web?.frame === frame) {
+        const url = src.replace(/[?#].*$/, "");
+        toLogic({
+          type: "webViewEvent",
+          webviewId: page.entry.webviewId,
+          name: "error",
+          detail: { url, fullUrl: src },
+        });
+      }
+    }
+  }
+  applyWindow(page);
+  if (lastRoute) onRoute(lastRoute);
 }
 
 function createPage(entry: StackEntry): PageView {
@@ -220,7 +277,12 @@ function createPage(entry: StackEntry): PageView {
   back.setAttribute("type", "button");
   back.setAttribute("aria-label", "back");
   back.innerHTML = `<svg viewBox="0 0 12 24" width="12" height="24"><path d="M10 3L2 12l8 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  back.addEventListener("click", () => toLogic({ type: "navigateBack" }));
+  back.addEventListener("click", () => {
+    // The back button goes back in the web-view's own history first, as on WeChat
+    const page = pages.get(entry.webviewId);
+    if (page?.web?.canGoBack) toBridge(page, { omr: "jsbridge-back" });
+    else toLogic({ type: "navigateBack" });
+  });
   const home = el("button", "omr-home");
   home.setAttribute("type", "button");
   home.setAttribute("aria-label", "home");
@@ -333,7 +395,7 @@ function onRoute(message: Extract<LogicToShell, { type: "route" }>): void {
   stack.forEach((entry, index) => {
     const page = pages.get(entry.webviewId);
     if (!page) return;
-    page.back.hidden = index === 0;
+    page.back.hidden = index === 0 && !page.web?.canGoBack;
     // A first page other than the home page or a tab offers the way home, as WeChat does
     page.home.hidden =
       index !== 0 ||
@@ -459,6 +521,17 @@ logic.port1.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
         .get(message.webviewId)
         ?.el.classList.toggle("omr-page-video-fullscreen", message.fullScreen);
       break;
+    case "webView": {
+      const page = pages.get(message.webviewId);
+      if (page) void openWebView(page, message.src);
+      break;
+    }
+    case "webViewResult": {
+      const page = pages.get(message.webviewId);
+      if (page)
+        toBridge(page, { omr: "jsbridge-result", callId: message.callId, result: message.result });
+      break;
+    }
     case "storage":
       // Kept for reloads in this tab; a new session starts from omr.config.json
       sessionStorage.setItem(storageKey, JSON.stringify(message.storage));
@@ -479,6 +552,55 @@ addEventListener(
   },
 );
 
+// What the page in a <web-view> sends: JSSDK bridge calls and its loads
+addEventListener("message", (event: MessageEvent<BridgeToShell>) => {
+  if (event.data?.omr !== "jsbridge") return;
+  const page = [...pages.values()].find(
+    (view) => view.web && event.source === view.web.frame.contentWindow,
+  );
+  if (!page?.web) return;
+  const webviewId = page.entry.webviewId;
+  const data = event.data;
+  switch (data.type) {
+    case "invoke":
+      toLogic({
+        type: "webViewInvoke",
+        webviewId,
+        callId: data.callId,
+        name: data.name,
+        args: data.args,
+      });
+      break;
+    case "load":
+    case "location":
+      page.web.canGoBack = data.canGoBack;
+      page.web.title = data.title;
+      toLogic({ type: "webViewEvent", webviewId, name: data.type, detail: { src: data.url } });
+      applyWindow(page);
+      if (lastRoute) onRoute(lastRoute);
+      break;
+    case "title":
+      page.web.title = data.title;
+      applyWindow(page);
+      break;
+    case "error":
+      toLogic({
+        type: "webViewEvent",
+        webviewId,
+        name: "error",
+        detail: { url: data.url, fullUrl: data.fullUrl },
+      });
+      break;
+  }
+});
+
+/** Tells web-view pages whether the Mini Program is in the foreground, as `WeixinJSBridge.on("onPageStateChange")` hears. */
+function webViewPageState(active: boolean): void {
+  for (const page of pages.values()) {
+    toBridge(page, { omr: "jsbridge-event", name: "onPageStateChange", data: { active } });
+  }
+}
+
 /** Leaves the Mini Program, as the capsule's close button does. */
 function appHide(): void {
   if (!backgroundScreen.hidden) return;
@@ -487,6 +609,7 @@ function appHide(): void {
   document.documentElement.dataset.omrAppState = "background";
   backgroundButton.textContent = "回前台";
   toLogic({ type: "appHide" });
+  webViewPageState(false);
 }
 /** Comes back to the Mini Program from `scene`. */
 function appShow(scene = 1001): void {
@@ -496,6 +619,7 @@ function appShow(scene = 1001): void {
   document.documentElement.dataset.omrAppState = "foreground";
   backgroundButton.textContent = "切后台";
   toLogic({ type: "appShow", scene });
+  webViewPageState(true);
 }
 
 /** Paints the device in the system theme: WeChat's own UI, the window and tab bar variables, and each page. */

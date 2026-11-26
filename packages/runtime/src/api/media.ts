@@ -126,6 +126,11 @@ export function createMediaApis(ctx: ApiContext): Record<string, unknown> {
 
   let backgroundAudio: BackgroundAudio | undefined;
 
+  ctx.pickImages = async (sourceType, count) => {
+    const source = await chooseSource(sourceType, "拍照");
+    return (await chooseImages(source, count)).map((image) => image.path);
+  };
+
   return {
     chooseImage: asyncApi("chooseImage", async (options) => {
       await ctx.requirePrivacy("chooseImage");

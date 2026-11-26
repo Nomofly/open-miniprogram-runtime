@@ -99,4 +99,9 @@ export interface ApiContext {
    * its preview, else `error` is its `insertCamera` failure, or it is still asking.
    */
   cameraState(webviewId: number): { ready: boolean; error?: string } | undefined;
+  /**
+   * Picks images as `wx.chooseImage` does, without its privacy check, for the
+   * JSSDK in `<web-view>`; set by the media APIs. Resolves their temporary paths.
+   */
+  pickImages?(sourceType: unknown, count: number): Promise<string[]>;
 }

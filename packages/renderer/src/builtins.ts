@@ -517,6 +517,9 @@ class WxCoverView extends Builtin {
   }
 }
 
+/** `<web-view>` draws nothing in the page: the shell shows the web page over it. */
+class WxWebView extends Builtin {}
+
 /** Tags WeChat documents that the simulator shows only as placeholders. */
 const PLACEHOLDER_TAGS = [
   "live-player",
@@ -524,7 +527,6 @@ const PLACEHOLDER_TAGS = [
   "voip-room",
   "channel-live",
   "channel-video",
-  "web-view",
   "official-account",
   "official-account-publish",
   "store-coupon",
@@ -558,6 +560,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-picker-view-column", WxPickerViewColumn],
   ["wx-rich-text", WxRichText],
   ["wx-editor", WxEditor],
+  ["wx-web-view", WxWebView],
   ["wx-video", WxVideo],
   ["wx-audio", WxAudio],
   ["wx-camera", WxCamera],

@@ -18,7 +18,9 @@ import type {
   ShellToLogic,
   TreeNode,
   ViewToLogic,
+  WebViewEventName,
   WxEvent,
+  WxEventTarget,
 } from "./protocol.ts";
 import { runWithTapGesture } from "./api/common.ts";
 import type { FsHost } from "./api/context.ts";
@@ -110,6 +112,16 @@ interface PageRecord {
    * works in `onShow`, until the view renders its host and attaches it.
    */
   tabBar?: ComponentRecord;
+  /** The page's `<web-view>`, as its view reports it. */
+  webView?: {
+    src: string;
+    target: WxEventTarget;
+    handlers: Partial<Record<WebViewEventName, { ownerId: number; handler: string }>>;
+    /** The URL the web page is at now, which sharing reports as `webViewUrl`. */
+    url: string;
+    /** What the web page posted with `wx.miniProgram.postMessage` since `bindmessage` last fired. */
+    messages: unknown[];
+  };
 }
 
 interface Meta {
@@ -836,9 +848,74 @@ export function startLogic(
     callHook(record.instance, "onHide");
     callPageLifetime(record, "hide");
   };
+  /** Fires a `<web-view>` event at the handler its template binds. */
+  const fireWebViewEvent = (
+    record: PageRecord,
+    name: WebViewEventName,
+    detail: Record<string, unknown>,
+  ) => {
+    const webView = record.webView;
+    const binding = webView?.handlers[name];
+    const owner = binding && ownerInstance(record, binding.ownerId);
+    if (!webView || !binding || !owner) return;
+    invokeHandler(owner, binding.handler, {
+      type: name,
+      timeStamp: Math.round(performance.now()),
+      target: webView.target,
+      currentTarget: webView.target,
+      detail,
+      mark: {},
+    });
+  };
+  /**
+   * Fires `bindmessage` with what the web page posted, as WeChat does when the
+   * page goes back, the web-view goes away, or the page is shared or its link copied.
+   */
+  const flushWebViewMessages = (record: PageRecord) => {
+    const messages = record.webView?.messages;
+    if (!messages?.length) return;
+    fireWebViewEvent(record, "message", { data: messages.splice(0) });
+  };
+  /** `wx.miniProgram` in the web page: routes from the web-view's page, and `postMessage`. */
+  const miniProgramApi = (record: PageRecord, args: Record<string, unknown>) => {
+    const name = String(args.name);
+    const arg = (args.arg ?? {}) as Record<string, unknown>;
+    try {
+      if (name === "postMessage") {
+        record.webView!.messages.push(arg);
+      } else if (
+        ["navigateTo", "redirectTo", "switchTab", "reLaunch", "navigateBack"].includes(name)
+      ) {
+        const url = typeof arg.url === "string" ? arg.url : undefined;
+        navigate(
+          name,
+          // As wx.switchTab, a tab page takes no query
+          { url: name === "switchTab" ? url?.split("?")[0] : url, delta: Number(arg.delta) || 1 },
+          record.route,
+        );
+      } else {
+        throw new Error(`${name} is not supported`);
+      }
+      return { err_msg: "invokeMiniProgramAPI:ok" };
+    } catch (error) {
+      return { err_msg: `invokeMiniProgramAPI:fail ${(error as Error).message}` };
+    }
+  };
+  const answerWebView = async (message: Extract<ShellToLogic, { type: "webViewInvoke" }>) => {
+    const record = pages.get(message.webviewId);
+    const result = !record?.webView
+      ? { err_msg: `${message.name}:fail the web-view is closed` }
+      : message.name === "invokeMiniProgramAPI"
+        ? miniProgramApi(record, message.args)
+        : await wxApi!.webViewInvoke(message.name, message.args);
+    post({ type: "webViewResult", webviewId: message.webviewId, callId: message.callId, result });
+  };
+
   const unloadPage = (record: PageRecord) => {
     const unloadEvent = { path: `/${record.route}`, routeEventId: activeRoute?.routeEventId ?? "" };
     if (record.instance) {
+      // Going back from a page, or closing it, hands the web-view's messages over first
+      flushWebViewMessages(record);
       wxApi?.app.emit("BeforePageUnload", { ...unloadEvent, page: record.instance });
       callHook(record.instance, "onUnload");
       if (record.def?.kind === "component") {
@@ -1084,6 +1161,10 @@ export function startLogic(
   const share = async (record: PageRecord, options: Record<string, unknown>) => {
     const instance = record.instance;
     if (!instance) return;
+    if (record.webView) {
+      flushWebViewMessages(record);
+      options = { ...options, webViewUrl: record.webView.url };
+    }
     let result = callHook(instance, "onShareAppMessage", options) as
       | Record<string, unknown>
       | undefined;
@@ -1133,7 +1214,9 @@ export function startLogic(
     items.push([
       "收藏",
       () => {
-        const result = callHook(instance, "onAddToFavorites", { webViewUrl: "" });
+        const result = callHook(instance, "onAddToFavorites", {
+          webViewUrl: record.webView?.url ?? "",
+        });
         const title = (result as Record<string, unknown> | undefined)?.title;
         void shellUi("showToast", {
           title: `已收藏 ${typeof title === "string" ? title : manifest!.appName}`,
@@ -1142,6 +1225,20 @@ export function startLogic(
         }).catch(() => {});
       },
     ]);
+    if (record.webView) {
+      items.push([
+        "复制链接",
+        () => {
+          flushWebViewMessages(record);
+          // WeChat copies the link itself, without the Mini Program's privacy check
+          void shellUi("showToast", {
+            title: "已复制链接",
+            icon: "success",
+            duration: 1500,
+          }).catch(() => {});
+        },
+      ]);
+    }
     items.push([
       "重新进入小程序",
       () => navigate("reLaunch", { url: `/${manifest!.entryPage}` }, ""),
@@ -1448,6 +1545,28 @@ export function startLogic(
       case "navigationBar":
         applyNavigationBar(record, message.attributes);
         break;
+      case "webView": {
+        const before = record.webView;
+        if (!message.src) {
+          if (!before) break;
+          // A web-view that goes away hands its messages over
+          flushWebViewMessages(record);
+          record.webView = undefined;
+          post({ type: "webView", webviewId: record.webviewId });
+          break;
+        }
+        record.webView = {
+          src: message.src,
+          target: message.target ?? { id: "", dataset: {}, offsetLeft: 0, offsetTop: 0 },
+          handlers: message.handlers ?? {},
+          url: before?.src === message.src ? before.url : message.src,
+          messages: before?.messages ?? [],
+        };
+        if (before?.src !== message.src) {
+          post({ type: "webView", webviewId: record.webviewId, src: message.src });
+        }
+        break;
+      }
       case "videoFullScreen":
         post({
           type: "videoFullScreen",
@@ -1679,6 +1798,18 @@ export function startLogic(
         break;
       case "theme":
         changeTheme(message.theme);
+        break;
+      case "webViewEvent": {
+        const record = pages.get(message.webviewId);
+        if (!record?.webView) break;
+        if (message.name !== "error" && typeof message.detail.src === "string") {
+          record.webView.url = message.detail.src;
+        }
+        if (message.name !== "location") fireWebViewEvent(record, message.name, message.detail);
+        break;
+      }
+      case "webViewInvoke":
+        void answerWebView(message);
         break;
       case "view": {
         const record = pages.get(message.webviewId);

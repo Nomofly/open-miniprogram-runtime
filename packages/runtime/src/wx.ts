@@ -22,6 +22,7 @@ import { createAnimationApis } from "./api/animation.ts";
 import { createNetworkApis } from "./api/network.ts";
 import { createAppApis } from "./api/app.ts";
 import { createObserverApis } from "./api/observers.ts";
+import { createWebViewApis } from "./api/web-view.ts";
 import type { ContextNode, PermissionKind, SelectorQueryRequest, SystemInfo } from "./protocol.ts";
 
 /** Descriptions WeChat shows in `wx.authorize` dialogs, by scope. */
@@ -958,6 +959,7 @@ export function createWx(host: WxHost) {
     animationApis.apis,
     observerApis.apis,
   );
+  const webViewApis = createWebViewApis(ctx);
 
   const proxy = new Proxy(wx, {
     get(target, name) {
@@ -987,5 +989,7 @@ export function createWx(host: WxHost) {
     animate: animationApis.animate,
     clearAnimation: animationApis.clearAnimation,
     animationDone: animationApis.animationDone,
+    /** Answers the JSSDK of a `<web-view>` page, other than `invokeMiniProgramAPI`. */
+    webViewInvoke: webViewApis.invoke,
   };
 }

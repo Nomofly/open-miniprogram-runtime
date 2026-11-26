@@ -209,6 +209,16 @@ export type ViewToLogic =
   | { type: "navigationBar"; attributes: Record<string, unknown> }
   /** A `<video>` of the page entered full screen, or the last one left it. */
   | { type: "videoFullScreen"; fullScreen: boolean }
+  /**
+   * The page's `<web-view>`: its `src` and the handlers bound to its events,
+   * sent when either changes; without `src`, the page has none any more.
+   */
+  | {
+      type: "webView";
+      src?: string;
+      target?: WxEventTarget;
+      handlers?: Partial<Record<WebViewEventName, { ownerId: number; handler: string }>>;
+    }
   /** The user pulled the page down far enough, or `wx.startPullDownRefresh` started it. */
   | { type: "pullDownRefresh" }
   /** An observed node's intersection ratio crossed a threshold. */
@@ -416,7 +426,32 @@ export type ShellToLogic =
   /** The user came back to the Mini Program from `scene` (1001 when absent); the last page shows again. */
   | { type: "appShow"; scene?: number }
   /** The system theme changed. */
-  | { type: "theme"; theme: Theme };
+  | { type: "theme"; theme: Theme }
+  /**
+   * A page's `<web-view>` finished loading a document (`load`, with `src`),
+   * could not load one (`error`, with `url` and `fullUrl`), or its page
+   * changed its URL without loading (`location`, with `src`).
+   */
+  | {
+      type: "webViewEvent";
+      webviewId: number;
+      name: "load" | "error" | "location";
+      detail: Record<string, unknown>;
+    }
+  /**
+   * The page in a `<web-view>` called `WeixinJSBridge.invoke`, as the JSSDK
+   * does; answered with `webViewResult`.
+   */
+  | {
+      type: "webViewInvoke";
+      webviewId: number;
+      callId: number;
+      name: string;
+      args: Record<string, unknown>;
+    };
+
+/** The events of `<web-view>`. */
+export type WebViewEventName = "load" | "error" | "message";
 
 export type LogicToShell =
   | {
@@ -433,7 +468,11 @@ export type LogicToShell =
   /** Capabilities the Mini Program is using now; the capsule shows their icons instead of its dots. */
   | { type: "permissionsInUse"; kinds: PermissionKind[] }
   /** A page's full-screen `<video>` covers the whole screen: the shell raises its WebView over the chrome, or puts it back. */
-  | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean };
+  | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean }
+  /** Opens `src` in a WebView over the page, or closes it without `src`. */
+  | { type: "webView"; webviewId: number; src?: string }
+  /** The answer to `webViewInvoke`, in the JSSDK bridge's format, such as `{ err_msg: "chooseImage:ok", localIds }`. */
+  | { type: "webViewResult"; webviewId: number; callId: number; result: Record<string, unknown> };
 
 /** Capabilities whose use WeChat shows in the capsule. */
 export type PermissionKind = "camera" | "record" | "location";

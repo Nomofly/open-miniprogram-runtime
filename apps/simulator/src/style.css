@@ -73,6 +73,10 @@ html[data-frame="0"] #omr-device {
   border: 0;
   background: #fff;
 }
+/* A <web-view>'s page covers the page's own WebView */
+.omr-web-page {
+  z-index: 1;
+}
 
 .omr-statusbar {
   position: absolute;
