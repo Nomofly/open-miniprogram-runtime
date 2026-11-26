@@ -247,17 +247,19 @@ module.exports = { required: require("x"), fetch, window, exports, self: this ==
   });
 
   test("skips symbolic links and unreadable directories", async () => {
+    // Windows ignores directory permissions, so it cannot lock a directory
+    const lockable = process.platform !== "win32";
     const dir = await fixture({
       "app.json": { pages: ["index"] },
       "index.js": "",
       "outside/secret.js": "",
-      "locked/hidden.js": "",
+      ...(lockable && { "locked/hidden.js": "" }),
     });
     await mkdir(path.join(dir, "pages"));
     await symlink(dir, path.join(dir, "pages", "loop"));
     await symlink(path.join(dir, "outside"), path.join(dir, "pages", "out"));
     await symlink(path.join(dir, "index.js"), path.join(dir, "pages", "link.js"));
-    await chmod(path.join(dir, "locked"), 0);
+    if (lockable) await chmod(path.join(dir, "locked"), 0);
 
     try {
       const bundle = await compileAppService(await loadProject(dir));
@@ -265,7 +267,7 @@ module.exports = { required: require("x"), fetch, window, exports, self: this ==
 
       expect(files).toEqual(["index.js", "outside/secret.js"]);
     } finally {
-      await chmod(path.join(dir, "locked"), 0o755);
+      if (lockable) await chmod(path.join(dir, "locked"), 0o755);
     }
   });
 });
