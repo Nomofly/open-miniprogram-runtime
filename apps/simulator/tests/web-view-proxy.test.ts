@@ -11,12 +11,12 @@ afterEach(() => {
   proxies.close();
 });
 
-/** Whether this machine can listen on `::1`. */
-const hasIpv6 = () =>
+/** Whether this machine has an address, such as `::1`, or `127.0.0.2`, which macOS lacks. */
+const canListen = (host: string) =>
   new Promise<boolean>((resolve) => {
     const server = createServer()
       .once("error", () => resolve(false))
-      .listen(0, "::1", () => server.close(() => resolve(true)));
+      .listen(0, host, () => server.close(() => resolve(true)));
   });
 
 /** A real site, which sets the cookie `sid` and remembers the headers it was sent. */
@@ -58,11 +58,14 @@ test("each origin's server gets back only its own cookies, even ones named like 
   expect(b.seen.at(-1)!.cookie).toBe("sid=marker");
 
   // Reachable at either loopback address, whichever one localhost resolves to; without IPv6, at 127.0.0.1
-  if (await hasIpv6()) expect(await (await fetch(`http://[::1]:${portA}/`)).text()).toBe("ok");
+  if (await canListen("::1"))
+    expect(await (await fetch(`http://[::1]:${portA}/`)).text()).toBe("ok");
   expect(await (await fetch(`http://localhost:${portA}/`)).text()).toBe("ok");
   // Another loopback address the browser used stays reachable too
-  const portOther = await proxies.open(a.origin, "WeChat", "127.0.0.2");
-  expect(await (await fetch(`http://127.0.0.2:${portOther}/`)).text()).toBe("ok");
+  if (await canListen("127.0.0.2")) {
+    const portOther = await proxies.open(a.origin, "WeChat", "127.0.0.2");
+    expect(await (await fetch(`http://127.0.0.2:${portOther}/`)).text()).toBe("ok");
+  }
 
   // Not reachable from other interfaces
   const { networkInterfaces } = await import("node:os");
