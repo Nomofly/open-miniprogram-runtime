@@ -885,6 +885,62 @@ describe("logic layer", () => {
     ]);
   });
 
+  test("a live-pusher needs the camera and the microphone, and the background reaches live components", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": false },
+        },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "livePusher", pusherId: 1, mounted: true });
+    for (let i = 0; i < 4; i++) await settle();
+    // Allowed the camera but refused the microphone: error 10002, and nothing in use
+    expect(toView(sent, "livePusherState")).toEqual([
+      {
+        type: "livePusherState",
+        pusherId: 1,
+        errCode: 10002,
+        errMsg: "insertLivePusher:fail record auth deny",
+      },
+    ]);
+    expect(sent.some((message) => message.type === "permissionsInUse")).toBe(false);
+
+    handle({ type: "appHide" });
+    handle({ type: "appShow" });
+    expect(toView(sent, "pageVisibility").slice(-2)).toEqual([
+      { type: "pageVisibility", visible: false, background: true },
+      { type: "pageVisibility", visible: true, background: true },
+    ]);
+  });
+
+  test("a live-pusher the user allows holds the camera and the microphone until it is removed", async () => {
+    const { sent, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": true },
+        },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "livePusher", pusherId: 2, mounted: true });
+    for (let i = 0; i < 4; i++) await settle();
+    view(1, { type: "livePusher", pusherId: 2, mounted: false });
+    await settle();
+    expect(toView(sent, "livePusherState")).toEqual([{ type: "livePusherState", pusherId: 2 }]);
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["camera"], ["camera", "record"], ["record"], []]);
+  });
+
   test("a camera moved while it waits for consent shows in the capsule once", async () => {
     const { sent, handle, view } = boot(
       { "app.js": APP, "pages/index/index.js": `Page({});` },

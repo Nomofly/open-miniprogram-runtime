@@ -334,26 +334,36 @@ describe("MapContext", () => {
 });
 
 describe("live contexts", () => {
-  test("every documented method succeeds and snapshot returns a generated image", async () => {
-    const { log, tap } = boot({
+  test("methods reach the <live-player> by id and the page's <live-pusher>, and snapshot returns a generated image", async () => {
+    const { log, tap, view, toView } = boot({
       [PAGE]: {
         run: `
           const player = wx.createLivePlayerContext("live");
           const pusher = wx.createLivePusherContext();
           player.play({ success: push });
-          pusher.applyFilter({ success: push });
+          pusher.start({ fail: push });
           player.snapshot({ success: (res) => push({ ...res, size: wx.getFileSystemManager().statSync(res.tempImagePath).size }) });`,
       },
     });
     await settle();
     tap("run");
+    await settle();
+    const [play, start] = toView("callBuiltin");
+    expect(play).toMatchObject({ target: { tag: "live-player", id: "live" }, method: "play" });
+    expect(start).toMatchObject({ target: { tag: "live-pusher" }, method: "start" });
+    expect(start!.target.id).toBeUndefined();
+    view(1, { type: "builtinResult", callId: play!.callId, result: {} });
+    view(1, { type: "builtinResult", callId: start!.callId, error: "camera is not ready" });
     await settle(20);
-    const [play, filter, snapshot] = log() as Record<string, unknown>[];
-    expect(play).toEqual({ errMsg: "play:ok" });
-    expect(filter).toEqual({ errMsg: "applyFilter:ok" });
+    const results = log() as Record<string, unknown>[];
+    const byName = (name: string) =>
+      results.find((result) => String(result.errMsg).startsWith(`${name}:`));
+    expect(byName("play")).toEqual({ errMsg: "play:ok" });
+    expect(byName("start")).toEqual({ errMsg: "start:fail camera is not ready" });
+    const snapshot = byName("snapshot")!;
     expect(snapshot).toMatchObject({ errMsg: "snapshot:ok", width: 640, height: 360 });
-    expect(snapshot!.tempImagePath).toMatch(/^http:\/\/tmp\/.+\.png$/);
-    expect(snapshot!.size).toBeGreaterThan(0);
+    expect(snapshot.tempImagePath).toMatch(/^http:\/\/tmp\/.+\.png$/);
+    expect(snapshot.size).toBeGreaterThan(0);
   });
 });
 

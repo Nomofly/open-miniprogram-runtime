@@ -5,11 +5,11 @@
  * such as `EditorContext`.
  *
  * `VideoContext` and `MapContext` drive the `<video>` and the simulated
- * `<map>` in the page, which fire their own events. `<live-player>` and
- * `<live-pusher>` are placeholders: their contexts succeed, with generated
- * images. `CameraContext` needs a `<camera>` on the page with `scope.camera`
- * granted; its photos and frames are generated, and its recordings hold no
- * playable frames, as `wx.chooseVideo` returns.
+ * `<map>` in the page, which fire their own events, as do the contexts of
+ * `<live-player>` and `<live-pusher>`; their snapshots are generated images.
+ * `CameraContext` needs a `<camera>` on the page with `scope.camera` granted;
+ * its photos and frames are generated, and its recordings hold no playable
+ * frames, as `wx.chooseVideo` returns.
  */
 import { asyncApi, safeCall, type AnyFunction, type Options } from "./common.ts";
 import type { ContextNode, ScrollViewNode } from "../protocol.ts";
@@ -199,7 +199,8 @@ export function createContextApis(ctx: ApiContext) {
     name: string,
     tag: string,
     methods: string[],
-    id: string,
+    /** Without one, the first such component in the page, as `wx.createLivePusherContext` finds it. */
+    id: string | undefined,
     scope: Scope,
     /** Runs after the component answered, with the call's options, such as translateMarker's animationEnd. */
     after?: (method: string, options: Options) => void,
@@ -350,9 +351,6 @@ export function createContextApis(ctx: ApiContext) {
     };
   };
 
-  /** Context methods that succeed without doing anything visible. */
-  const succeeding = (methods: string[]) =>
-    Object.fromEntries(methods.map((method) => [method, callbackApi(method, async () => ({}))]));
   const snapshot = (width: number, height: number) =>
     callbackApi("snapshot", async () => ({
       tempImagePath: await generateImage(width, height),
@@ -360,13 +358,17 @@ export function createContextApis(ctx: ApiContext) {
       height,
     }));
 
-  const createLivePlayerContext = (_id?: string, _component?: object) => ({
-    ...succeeding(LIVE_PLAYER_METHODS),
+  // wx.createLivePlayerContext: each method calls the <live-player> in the view, which fires its statechange codes
+  const livePlayerContext = (id: string, scope: Scope) => ({
+    ...builtinContext("LivePlayerContext", "live-player", LIVE_PLAYER_METHODS, id, scope),
     // A frame of the stream: landscape, as streams usually are
     snapshot: snapshot(640, 360),
   });
-  const createLivePusherContext = () => ({
-    ...succeeding(LIVE_PUSHER_METHODS),
+  const createLivePlayerContext = (id: string, component?: object) =>
+    livePlayerContext(String(id), scopeFor(component));
+  // wx.createLivePusherContext: the page's <live-pusher>, which pushes and fires its codes
+  const livePusherContext = (id: string | undefined, scope: Scope) => ({
+    ...builtinContext("LivePusherContext", "live-pusher", LIVE_PUSHER_METHODS, id, scope),
     snapshot: snapshot(360, 640),
     setZoom: callbackApi("setZoom", async (options) => ({
       zoom: Math.min(CAMERA_MAX_ZOOM, Math.max(1, finite(options.zoom, 1))),
@@ -395,9 +397,9 @@ export function createContextApis(ctx: ApiContext) {
       case "map":
         return mapContext(id, scope);
       case "live-player":
-        return createLivePlayerContext(id);
+        return livePlayerContext(id, scope);
       case "live-pusher":
-        return createLivePusherContext();
+        return livePusherContext(node.id, scope);
       case "canvas":
         return node.canvasId === undefined || node.canvasType
           ? undefined
@@ -450,7 +452,7 @@ export function createContextApis(ctx: ApiContext) {
         mapContext(mapId, scopeFor(component)),
       createCameraContext,
       createLivePlayerContext,
-      createLivePusherContext,
+      createLivePusherContext: () => livePusherContext(undefined, scopeFor()),
     } as Record<string, unknown>,
     contextOf,
   };

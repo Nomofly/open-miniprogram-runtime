@@ -1035,6 +1035,17 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     post({ type: "camera", cameraId: camera.cameraId, mounted, mode, frameSize });
   });
 
+  // <live-pusher> asks the logic layer for the camera and the microphone when it is inserted
+  const pushers = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-live-pusher", (event) => {
+    const { pusher, mounted } = (
+      event as CustomEvent<{ pusher: BuiltinElement & { pusherId: number }; mounted: boolean }>
+    ).detail;
+    if (mounted) pushers.set(pusher.pusherId, pusher);
+    else pushers.delete(pusher.pusherId);
+    post({ type: "livePusher", pusherId: pusher.pusherId, mounted });
+  });
+
   // <official-account> asks the logic layer whether the launch scene lets it show
   const officialAccounts = new Map<number, BuiltinElement>();
   document.addEventListener("omr-official-account", (event) => {
@@ -1313,6 +1324,12 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         openContainers.at(-1)?.omrClose();
         return;
       case "pageVisibility":
+        for (const live of document.querySelectorAll("wx-live-player, wx-live-pusher")) {
+          (live as Partial<BuiltinElement>).omrPageVisibility?.(
+            message.visible,
+            message.background === true,
+          );
+        }
         // auto-pause-if-navigate, true by default: a hidden page's videos pause
         if (!message.visible) {
           for (const video of document.getElementsByTagName("wx-video")) {
@@ -1353,6 +1370,9 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         return;
       case "cameraState":
         cameras.get(message.cameraId)?.omrCameraState?.(message);
+        return;
+      case "livePusherState":
+        pushers.get(message.pusherId)?.omrLivePusherState?.(message);
         return;
       case "animate":
       case "clearAnimation": {

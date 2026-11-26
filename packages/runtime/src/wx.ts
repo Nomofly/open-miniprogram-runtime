@@ -597,6 +597,48 @@ export function createWx(host: WxHost) {
       if (release) host.sendView(webviewId, { type: "cameraState", cameraId, stopped });
     }
   };
+  /** Each `<live-pusher>` on a page, with the release of the camera and microphone it holds. */
+  const pushers = new Map<string, { release?: () => void }>();
+  /**
+   * A `<live-pusher>` was inserted or removed. It needs the privacy agreement,
+   * `scope.camera` and `scope.record`; a refusal is its `error` 10001 or 10002.
+   */
+  const livePusherMounted = async (webviewId: number, pusherId: number, mounted: boolean) => {
+    const key = `${webviewId}:${pusherId}`;
+    pushers.get(key)?.release?.();
+    pushers.delete(key);
+    if (!mounted) return;
+    const entry: { release?: () => void } = {};
+    pushers.set(key, entry);
+    let errCode: number | undefined;
+    let errMsg: string | undefined;
+    try {
+      await requirePrivacy("live-pusher");
+      if (!(await requestScope("scope.camera"))) errCode = 10001;
+      else if (!(await requestScope("scope.record"))) errCode = 10002;
+    } catch (reason) {
+      errCode = 10001;
+      errMsg = `insertLivePusher:fail ${(reason as Error).message}`;
+    }
+    if (pushers.get(key) !== entry) return;
+    if (errCode === undefined) {
+      const camera = holdPermission("camera");
+      const record = holdPermission("record");
+      entry.release = () => {
+        camera();
+        record();
+      };
+    }
+    host.sendView(webviewId, {
+      type: "livePusherState",
+      pusherId,
+      ...(errCode !== undefined && {
+        errCode,
+        errMsg:
+          errMsg ?? `insertLivePusher:fail ${errCode === 10001 ? "camera" : "record"} auth deny`,
+      }),
+    });
+  };
   /**
    * Whether `<official-account>` may show: only after a launch from a scanned
    * code (or the trial version's entry), and while the app came back from a
@@ -1072,6 +1114,7 @@ export function createWx(host: WxHost) {
     nicknameFocus,
     cameraMounted,
     stopCameras,
+    livePusherMounted,
     officialAccountState,
     observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
       observerApis.receive(...args),

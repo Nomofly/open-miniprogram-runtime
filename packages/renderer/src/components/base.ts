@@ -21,6 +21,10 @@ export interface BuiltinElement extends HTMLElement {
     scan?: Record<string, unknown>;
     stopped?: boolean;
   }): void;
+  /** Tells a `<live-pusher>` whether the user allowed the camera and the microphone. */
+  omrLivePusherState?(state: { errCode?: number; errMsg?: string }): void;
+  /** The page was hidden or shown; `background` when the app went to or came back from the background. */
+  omrPageVisibility?(visible: boolean, background: boolean): void;
   /** A method of the component's context, such as `play` of `VideoContext`; throws the fail reason. */
   omrCall?(
     method: string,

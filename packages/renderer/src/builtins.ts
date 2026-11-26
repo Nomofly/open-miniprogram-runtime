@@ -21,6 +21,7 @@ import {
 import { SKYLINE_ONLY_TAGS, SkylineOnly, WxGridView } from "./components/skyline.ts";
 import { WxEditor } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
+import { WxLivePlayer, WxLivePusher } from "./components/live.ts";
 import { WxMap } from "./components/map.ts";
 import { WxAudio, WxImage, WxVideo } from "./components/media.ts";
 import { WxChannelLive, WxChannelVideo, WxOfficialAccount } from "./components/open-cards.ts";
@@ -620,8 +621,6 @@ class WxWebView extends Builtin {}
 
 /** Tags WeChat documents that the simulator shows only as placeholders. */
 const PLACEHOLDER_TAGS = [
-  "live-player",
-  "live-pusher",
   "voip-room",
   "official-account-publish",
   "store-coupon",
@@ -667,6 +666,8 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-video", WxVideo],
   ["wx-audio", WxAudio],
   ["wx-camera", WxCamera],
+  ["wx-live-player", WxLivePlayer],
+  ["wx-live-pusher", WxLivePusher],
   ["wx-page-container", WxPageContainer],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],

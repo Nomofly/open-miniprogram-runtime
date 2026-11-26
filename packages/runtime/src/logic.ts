@@ -836,19 +836,19 @@ export function startLogic(
     return record;
   };
 
-  const showPage = (record: PageRecord | undefined) => {
+  const showPage = (record: PageRecord | undefined, background = false) => {
     if (!record?.instance || record.shown) return;
     record.shown = true;
-    sendView(record, { type: "pageVisibility", visible: true });
+    sendView(record, { type: "pageVisibility", visible: true, ...(background && { background }) });
     callHook(record.instance, "onShow");
     callPageLifetime(record, "show");
     // A page shown again has nothing left to render before its route is done
     if (record.readyFired) callPageLifetime(record, "routeDone");
   };
-  const hidePage = (record: PageRecord | undefined) => {
+  const hidePage = (record: PageRecord | undefined, background = false) => {
     if (!record?.instance || !record.shown) return;
     record.shown = false;
-    sendView(record, { type: "pageVisibility", visible: false });
+    sendView(record, { type: "pageVisibility", visible: false, ...(background && { background }) });
     callHook(record.instance, "onHide");
     callPageLifetime(record, "hide");
   };
@@ -1537,6 +1537,9 @@ export function startLogic(
       case "camera":
         void wxApi!.cameraMounted(record.webviewId, message.cameraId, message.mounted, message);
         break;
+      case "livePusher":
+        void wxApi!.livePusherMounted(record.webviewId, message.pusherId, message.mounted);
+        break;
       case "animationDone":
         wxApi!.animationDone(record.webviewId, message.animationId);
         break;
@@ -1845,7 +1848,7 @@ export function startLogic(
   const appHide = () => {
     if (!wxApi || inBackground) return;
     inBackground = true;
-    hidePage(stack[stack.length - 1]);
+    hidePage(stack[stack.length - 1], true);
     callHook(app, "onHide");
     wxApi.app.emit("AppHide", {});
     wxApi.stopCameras(true);
@@ -1864,7 +1867,7 @@ export function startLogic(
     callHook(app, "onShow", toJsonValue(enterOptions));
     wxApi.app.emit("AppShow", toJsonValue(enterOptions));
     wxApi.stopCameras(false);
-    showPage(top);
+    showPage(top, true);
   };
   const changeTheme = (next: Theme) => {
     if (next === theme) return;

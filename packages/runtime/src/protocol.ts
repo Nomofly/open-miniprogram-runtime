@@ -183,6 +183,8 @@ export type ViewToLogic =
   | { type: "nickname"; focused: boolean }
   /** A `<camera>` was inserted into or removed from the page, with its `mode` and `frame-size`, which only count then. */
   | { type: "camera"; cameraId: number; mounted: boolean; mode?: string; frameSize?: string }
+  /** A `<live-pusher>` was inserted into or removed from the page; it needs the camera and the microphone. */
+  | { type: "livePusher"; pusherId: number; mounted: boolean }
   | {
       type: "attach";
       nodeId: number;
@@ -281,6 +283,8 @@ export type LogicToView =
       scan?: Record<string, unknown>;
       stopped?: boolean;
     }
+  /** Whether a `<live-pusher>` may use the camera and the microphone; `errCode` 10001 or 10002 names the refusal. */
+  | { type: "livePusherState"; pusherId: number; errCode?: number; errMsg?: string }
   /** Whether an `<official-account>` shows (`status` 0) or fails, with the `load` or `error` detail and the account's name. */
   | {
       type: "officialAccountState";
@@ -322,7 +326,8 @@ export type LogicToView =
   /** A return while a `<page-container>` is open: the view closes the container. */
   | { type: "closePageContainer" }
   /** The page went to the background (another page covers it, or the app left) or came back. */
-  | { type: "pageVisibility"; visible: boolean }
+  /** `background` is set when the app went to or came back from the background, not another page. */
+  | { type: "pageVisibility"; visible: boolean; background?: boolean }
   /** Starts or ends the pull-down refresh animation. */
   | { type: "pullDownRefresh"; refreshing: boolean }
   /** `wx.setBackgroundColor` and `wx.setBackgroundTextStyle`: the window behind the page. */
