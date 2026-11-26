@@ -212,6 +212,19 @@ export type ViewToLogic =
   /** A long press on an `<image show-menu-by-longpress>`. */
   | { type: "imageMenu" }
   /**
+   * A tap on a `<navigator target="miniProgram">`: its `open-type` and attributes,
+   * and the handlers of its `success`, `fail` and `complete`.
+   */
+  | {
+      type: "navigateMiniProgram";
+      openType: string;
+      props: Record<string, unknown>;
+      target: WxEventTarget;
+      handlers: Partial<
+        Record<"success" | "fail" | "complete", { ownerId: number; handler: string }>
+      >;
+    }
+  /**
    * The page's `<web-view>`: its `src` and the handlers bound to its events,
    * sent when either changes; without `src`, the page has none any more.
    */
@@ -492,6 +505,8 @@ export type LogicToShell =
   | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean }
   /** Opens `src` in a WebView over the page, or closes it without `src`. */
   | { type: "webView"; webviewId: number; src?: string }
+  /** The Mini Program left for WeChat (`wx.exitMiniProgram`), as the capsule's close button does. */
+  | { type: "exit" }
   /** The answer to `webViewInvoke`, in the JSSDK bridge's format, such as `{ err_msg: "chooseImage:ok", localIds }`. */
   | { type: "webViewResult"; webviewId: number; callId: number; result: Record<string, unknown> };
 

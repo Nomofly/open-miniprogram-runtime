@@ -548,6 +548,9 @@ logic.port1.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
         toBridge(page, { omr: "jsbridge-result", callId: message.callId, result: message.result });
       break;
     }
+    case "exit":
+      appHide();
+      break;
     case "storage":
       // Kept for reloads in this tab; a new session starts from omr.config.json
       sessionStorage.setItem(storageKey, JSON.stringify(message.storage));

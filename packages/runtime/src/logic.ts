@@ -1608,6 +1608,51 @@ export function startLogic(
       case "imageMenu":
         void imageMenu();
         break;
+      case "navigateMiniProgram": {
+        const { openType, props, target, handlers } = message;
+        const api = {
+          navigate: "navigateToMiniProgram",
+          navigateBack: "navigateBackMiniProgram",
+          exit: "exitMiniProgram",
+        }[openType];
+        if (!api) break;
+        const options =
+          openType === "navigate"
+            ? {
+                appId: props["app-id"],
+                path: props.path,
+                extraData: props["extra-data"],
+                envVersion: props.version,
+                shortLink: props["short-link"],
+              }
+            : openType === "navigateBack"
+              ? { extraData: props["extra-data"] }
+              : {};
+        const fire = (name: "success" | "fail" | "complete") => (detail: unknown) => {
+          const binding = handlers[name];
+          const owner = binding && ownerInstance(record, binding.ownerId);
+          if (!owner) return;
+          invokeHandler(owner, binding.handler, {
+            type: name,
+            timeStamp: Date.now(),
+            target,
+            currentTarget: target,
+            detail: toJsonValue(detail) as Record<string, unknown>,
+          });
+        };
+        // The navigator's tap is the user gesture that opening another Mini Program needs
+        runWithTapGesture(() =>
+          (wxApi!.wx[api] as (options: object) => unknown)({
+            ...Object.fromEntries(
+              Object.entries(options).filter(([, value]) => value !== undefined),
+            ),
+            success: fire("success"),
+            fail: fire("fail"),
+            complete: fire("complete"),
+          }),
+        );
+        break;
+      }
       case "viewReply":
         wxApi!.app.viewReply(record.webviewId, message.requestId, message.result, message.error);
         break;
@@ -1696,6 +1741,7 @@ export function startLogic(
         if (record) sendView(record, viewMessage);
       },
       setPermissionsInUse: (kinds) => post({ type: "permissionsInUse", kinds }),
+      exit: () => post({ type: "exit" }),
       setTabBarHidden: (hidden) => {
         tabBarHidden = hidden;
       },

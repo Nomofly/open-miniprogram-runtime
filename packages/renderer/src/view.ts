@@ -754,11 +754,36 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     }
     const navigator = target.closest("wx-navigator");
     if (navigator) {
-      const props = states.get(navigator)?.props ?? {};
-      if (props.target !== "miniProgram") {
+      const state = states.get(navigator);
+      const props = state?.props ?? {};
+      const openType = toText(props["open-type"] ?? "navigate");
+      if (props.target === "miniProgram") {
+        const handler = (name: string) => {
+          const binding = state?.events.find((event) => event.name === name && !event.capture);
+          return binding?.handler
+            ? { ownerId: state!.ownerId, handler: binding.handler }
+            : undefined;
+        };
+        post({
+          type: "navigateMiniProgram",
+          openType,
+          props: Object.fromEntries(
+            ["app-id", "path", "extra-data", "version", "short-link"].map((name) => [
+              name,
+              props[name],
+            ]),
+          ),
+          target: targetOf(navigator),
+          handlers: {
+            success: handler("success"),
+            fail: handler("fail"),
+            complete: handler("complete"),
+          },
+        });
+      } else {
         post({
           type: "navigate",
-          openType: toText(props["open-type"] ?? "navigate"),
+          openType,
           url: props.url === undefined ? undefined : toText(props.url),
           delta: props.delta === undefined ? undefined : Number(props.delta),
         });

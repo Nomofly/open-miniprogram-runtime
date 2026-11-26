@@ -510,7 +510,10 @@ export function createDeviceApis(ctx: ApiContext): Record<string, unknown> {
       })(options);
     },
     navigateBackMiniProgram: asyncApi("navigateBackMiniProgram", async () => ({})),
-    exitMiniProgram: asyncApi("exitMiniProgram", async () => ({})),
+    exitMiniProgram: asyncApi("exitMiniProgram", async () => {
+      ctx.host.exit();
+      return {};
+    }),
     openCustomerServiceChat: asyncApi("openCustomerServiceChat", async () => ({})),
     showShareMenu: asyncApi("showShareMenu", async () => ({})),
     hideShareMenu: asyncApi("hideShareMenu", async () => ({})),

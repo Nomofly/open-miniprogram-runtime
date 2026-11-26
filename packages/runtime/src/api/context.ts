@@ -81,6 +81,8 @@ export interface WxHost {
   setTabBarHidden(hidden: boolean): void;
   /** Shows in the capsule which capabilities are in use. */
   setPermissionsInUse(kinds: PermissionKind[]): void;
+  /** Leaves the Mini Program for WeChat, which keeps it in the background. */
+  exit(): void;
 }
 
 export interface ApiContext {

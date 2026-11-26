@@ -1327,4 +1327,38 @@ describe("logic layer", () => {
     await settle();
     expect(uis()[1]).toMatchObject({ name: "showToast", args: { title: "已保存到系统相册" } });
   });
+
+  test("a navigator to another Mini Program reports to its success and complete, and exit leaves", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ on(e) { getApp().log.push([e.type, e.detail.errMsg]); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow" } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "nav", dataset: {} };
+    const handlers = {
+      success: { ownerId: 0, handler: "on" },
+      fail: { ownerId: 0, handler: "on" },
+      complete: { ownerId: 0, handler: "on" },
+    };
+    view(1, {
+      type: "navigateMiniProgram",
+      openType: "navigate",
+      props: { "app-id": "wx1111111111111111", path: "pages/a/a" },
+      target,
+      handlers,
+    });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(log()).toEqual([
+      ["success", "navigateToMiniProgram:ok"],
+      ["complete", "navigateToMiniProgram:ok"],
+    ]);
+
+    view(1, { type: "navigateMiniProgram", openType: "exit", props: {}, target, handlers });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(sent.filter((message) => message.type === "exit")).toHaveLength(1);
+  });
 });
