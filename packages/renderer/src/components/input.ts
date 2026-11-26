@@ -88,6 +88,9 @@ export class WxInput extends Builtin {
     if (maxlength < 0) field.removeAttribute("maxlength");
     else field.maxLength = maxlength;
     field.disabled = this.flag("disabled");
+    // `cursor-color`: a color on iOS; Android knows only "default" and "green"
+    const cursor = this.str("cursor-color");
+    field.style.caretColor = cursor === "green" ? "#07c160" : cursor === "default" ? "" : cursor;
     placeholder.textContent = this.str("placeholder");
     placeholder.className =
       `omr-placeholder ${this.str("placeholder-class") || this.defaultPlaceholderClass}`.trim();
