@@ -730,6 +730,11 @@ wx-web-view { position: fixed !important; inset: 0; width: 100%; height: 100%; z
 wx-editor { display: block; position: relative; width: 100%; height: 200px; min-height: 200px; box-sizing: border-box; overflow: hidden; cursor: text; user-select: text; }
 :where(wx-editor) > :where(.ql-editor) { position: relative; height: 100%; box-sizing: border-box; padding: 12px 15px; overflow-y: auto; outline: none; white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; tab-size: 4; }
 :where(wx-editor) > :where(.ql-editor.ql-blank)::before { content: attr(data-placeholder); position: absolute; left: 15px; right: 15px; color: rgba(0, 0, 0, 0.4); pointer-events: none; }
+wx-editor > .omr-editor-image-tools { position: absolute; box-sizing: border-box; border: 1px dashed #576b95; pointer-events: none; z-index: 1; font: 12px/1.6 sans-serif; }
+.omr-editor-image-tools > .omr-size { position: absolute; right: 2px; bottom: 2px; padding: 0 4px; border-radius: 2px; background: rgba(0, 0, 0, 0.6); color: #fff; }
+.omr-editor-image-tools > .omr-resize { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; box-sizing: border-box; border: 2px solid #576b95; background: #fff; cursor: nwse-resize; pointer-events: auto; touch-action: none; }
+.omr-editor-image-tools > .omr-toolbar { position: absolute; left: 0; top: 0; display: flex; gap: 1px; border-radius: 4px; overflow: hidden; background: rgba(0, 0, 0, 0.75); pointer-events: auto; }
+.omr-editor-image-tools > .omr-toolbar > span { padding: 2px 8px; color: #fff; cursor: pointer; }
 .navigator-hover { background-color: rgba(0, 0, 0, 0.1); opacity: 0.7; }
 
 wx-input { display: block; position: relative; height: 1.4rem; min-height: 1.4rem; line-height: 1.4rem; overflow: hidden; white-space: nowrap; text-overflow: clip; cursor: auto; user-select: text; }

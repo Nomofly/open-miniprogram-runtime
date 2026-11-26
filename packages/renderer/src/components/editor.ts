@@ -54,6 +54,9 @@ export class WxEditor extends Builtin {
   private redoStack: Snapshot[] = [];
   private lastTyping = 0;
   private lastStatus = "";
+  /** The size, resize and toolbar controls of a tapped image (`show-img-*`). */
+  private imageTools?: HTMLElement;
+  private selectedImage?: HTMLImageElement;
   /**
    * Where an image source is shown from. The view sets it to resolve package
    * paths against the caller's template, as `<image>` does.
@@ -69,10 +72,28 @@ export class WxEditor extends Builtin {
     area.innerHTML = "<p><br></p>";
     this.area = area;
     this.prepend(area);
-    area.addEventListener("focus", () => emit(this, "focus", this.contents()));
-    area.addEventListener("blur", () => emit(this, "blur", this.contents()));
+    // The page moves up for the simulated keyboard, as WeChat pushes it to keep the editor visible
+    const keyboard = (focused: boolean) =>
+      document.dispatchEvent(
+        new CustomEvent("omr-keyboard", { detail: { input: this, focused, height: 0 } }),
+      );
+    area.addEventListener("focus", () => {
+      keyboard(true);
+      emit(this, "focus", this.contents());
+    });
+    area.addEventListener("blur", () => {
+      keyboard(false);
+      emit(this, "blur", this.contents());
+    });
+    area.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLImageElement && area.contains(target)) this.showImageTools(target);
+      else this.hideImageTools();
+    });
+    area.addEventListener("scroll", () => this.placeImageTools());
     area.addEventListener("beforeinput", (event) => this.beforeInput(event));
     area.addEventListener("input", () => {
+      this.hideImageTools();
       this.syncEmpty();
       emit(this, "input", this.contents());
     });
@@ -286,6 +307,7 @@ export class WxEditor extends Builtin {
   }
 
   private render(items: Item[], range: Range, focus: boolean): void {
+    this.hideImageTools();
     this.area!.innerHTML = toHtml(items, { imageUrl: (src) => this.omrResolveAsset(src) });
     this.syncEmpty();
     this.select(clampRange(items, range.index, range.length), focus);
@@ -382,6 +404,129 @@ export class WxEditor extends Builtin {
     this.syncEmpty();
     this.select(snapshot.range, false);
     emit(this, "input", this.contents());
+  }
+
+  /**
+   * Shows the controls `show-img-size` (the image's size), `show-img-resize`
+   * (a corner that drags its width) and `show-img-toolbar` (align and delete)
+   * ask for around a tapped image.
+   */
+  private showImageTools(img: HTMLImageElement): void {
+    const size = this.flag("show-img-size");
+    const resize = this.flag("show-img-resize");
+    const toolbar = this.flag("show-img-toolbar") && this.area!.contentEditable === "true";
+    if (!size && !resize && !toolbar) return;
+    this.hideImageTools();
+    this.selectedImage = img;
+    const tools = document.createElement("div");
+    tools.className = "omr-editor-image-tools";
+    tools.contentEditable = "false";
+    // The controls keep the editor's focus and selection
+    tools.addEventListener("mousedown", (event) => event.preventDefault());
+    if (size)
+      tools.append(Object.assign(document.createElement("span"), { className: "omr-size" }));
+    if (resize && this.area!.contentEditable === "true") {
+      const handle = document.createElement("span");
+      handle.className = "omr-resize";
+      handle.addEventListener("pointerdown", (event) => this.dragImageSize(event, img));
+      tools.append(handle);
+    }
+    if (toolbar) {
+      const bar = document.createElement("div");
+      bar.className = "omr-toolbar";
+      const actions: [string, () => void][] = [
+        ["左对齐", () => this.alignImage(img, "left")],
+        ["居中", () => this.alignImage(img, "center")],
+        ["右对齐", () => this.alignImage(img, "right")],
+        ["删除", () => this.deleteImage(img)],
+      ];
+      for (const [label, run] of actions) {
+        const button = document.createElement("span");
+        button.textContent = label;
+        button.addEventListener("click", run);
+        bar.append(button);
+      }
+      tools.append(bar);
+    }
+    this.imageTools = tools;
+    this.append(tools);
+    this.placeImageTools();
+  }
+
+  private hideImageTools(): void {
+    this.imageTools?.remove();
+    this.imageTools = undefined;
+    this.selectedImage = undefined;
+  }
+
+  /** Puts the controls on the image, which moves when the editor scrolls or the image is resized. */
+  private placeImageTools(): void {
+    const { imageTools: tools, selectedImage: img } = this;
+    if (!tools || !img) return;
+    if (!img.isConnected) {
+      this.hideImageTools();
+      return;
+    }
+    const host = this.getBoundingClientRect();
+    const rect = img.getBoundingClientRect();
+    Object.assign(tools.style, {
+      left: `${rect.left - host.left}px`,
+      top: `${rect.top - host.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
+    const size = tools.querySelector(".omr-size");
+    if (size) size.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+  }
+
+  /** Dragging the corner sets the image's width; its height follows the aspect ratio. */
+  private dragImageSize(event: PointerEvent, img: HTMLImageElement): void {
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = img.getBoundingClientRect().width;
+    const maxWidth = this.area!.clientWidth;
+    this.remember();
+    const move = (moved: PointerEvent) => {
+      const width = Math.round(
+        Math.min(maxWidth, Math.max(20, startWidth + moved.clientX - startX)),
+      );
+      img.setAttribute("width", String(width));
+      img.removeAttribute("height");
+      this.placeImageTools();
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      emit(this, "input", this.contents());
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  }
+
+  /** Selects the image, as the toolbar's actions work on it. */
+  private selectImage(img: HTMLImageElement): void {
+    const range = document.createRange();
+    range.selectNode(img);
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  private alignImage(img: HTMLImageElement, align: string): void {
+    this.selectImage(img);
+    this.format("align", align);
+  }
+
+  private deleteImage(img: HTMLImageElement): void {
+    this.selectImage(img);
+    this.edit((items, range) => ({
+      items: replaceRange(items, range.index, range.length, []),
+      range: { index: range.index, length: 0 },
+    }));
   }
 
   private syncEmpty(): void {
