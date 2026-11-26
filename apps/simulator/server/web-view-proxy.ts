@@ -52,18 +52,15 @@ const RESPONSE_DROPPED = new Set([
 ]);
 
 export function createWebViewProxies(bridge: () => Promise<string>): WebViewProxies {
-  const proxies = new Map<string, Promise<{ servers: Server[]; port: number }>>();
+  const proxies = new Map<string, Promise<Proxy>>();
   let userAgent = "";
 
   const open = (origin: string, address: string) => {
     // An IPv4 client of a dual-stack server
     const host = address.replace(/^::ffff:(?=\d+\.)/, "");
-    // `localhost` may resolve to either loopback address, so a loopback proxy listens on both
-    // An address such as 127.0.0.2 stays reachable beside them; sorted, so either family finds the same proxy
-    const hosts = isLoopbackAddress(host)
-      ? [...new Set([host, ...LOOPBACK])].filter((name) => name !== "localhost").sort()
-      : [host];
-    const key = `${hosts.join(" ")} ${origin}`;
+    // One proxy per origin for every loopback address: `localhost` may resolve to either family
+    const loopback = isLoopbackAddress(host);
+    const key = loopback ? `loopback ${origin}` : `${host} ${origin}`;
     let proxy = proxies.get(key);
     if (!proxy) {
       const handle = (req: IncomingMessage, res: ServerResponse) => {
@@ -72,11 +69,32 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
           res.end((error as Error).message);
         });
       };
-      proxy = listenAll(hosts, handle);
+      proxy = listenAll(loopback ? LOOPBACK : [host], handle).then((listening) => ({
+        ...listening,
+        handle,
+        hosts: new Set(loopback ? LOOPBACK : [host]),
+      }));
       proxies.set(key, proxy);
       proxy.catch(() => proxies.delete(key));
     }
-    return proxy.then(({ port }) => port);
+    if (!loopback || host === "localhost") return proxy.then(({ port }) => port);
+    // Another loopback address, such as 127.0.0.2: the same proxy listens there too, on its port
+    const shared = proxy;
+    const widened = shared.then(async (listening) => {
+      if (!listening.hosts.has(host)) {
+        const server = createServer(listening.handle);
+        await listen(server, listening.port, host);
+        listening.servers.push(server);
+        listening.hosts.add(host);
+      }
+      return listening;
+    });
+    // A failure there leaves the proxy as it was for the other addresses
+    proxies.set(
+      key,
+      widened.catch(() => shared),
+    );
+    return widened.then(({ port }) => port);
   };
 
   /** The address of the proxy for a URL, at the host the browser reached this proxy by. */
@@ -186,6 +204,14 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       proxies.clear();
     },
   };
+}
+
+/** A proxy for one origin: its servers, one per address it listens on, all on one port. */
+interface Proxy {
+  servers: Server[];
+  port: number;
+  hosts: Set<string>;
+  handle: (req: IncomingMessage, res: ServerResponse) => void;
 }
 
 const LOOPBACK = ["127.0.0.1", "::1"];

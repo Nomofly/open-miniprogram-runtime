@@ -65,8 +65,10 @@ test("each origin's server gets back only its own cookies, even ones named like 
   expect(await proxies.open(a.origin, "WeChat", "::1")).toBe(portA);
   // Another loopback address the browser used stays reachable too
   if (await canListen("127.0.0.2")) {
-    const portOther = await proxies.open(a.origin, "WeChat", "127.0.0.2");
-    expect(await (await fetch(`http://127.0.0.2:${portOther}/`)).text()).toBe("ok");
+    // on the same port, so the origin's page keeps one origin for its storage
+    expect(await proxies.open(a.origin, "WeChat", "127.0.0.2")).toBe(portA);
+    expect(await (await fetch(`http://127.0.0.2:${portA}/`)).text()).toBe("ok");
+    expect(await proxies.open(a.origin, "WeChat", "::1")).toBe(portA);
   }
 
   // Not reachable from other interfaces
