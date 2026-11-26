@@ -616,6 +616,22 @@ class WxCoverView extends Builtin {
   }
 }
 
+let warnedFunctionalPage = false;
+/**
+ * `<functional-page-navigator>` opens a functional page only inside a plugin,
+ * which the simulator does not run; in an app's own pages it shows its children
+ * and a tap does nothing, as on WeChat.
+ */
+class WxFunctionalPageNavigator extends Builtin {
+  connectedCallback(): void {
+    if (warnedFunctionalPage) return;
+    warnedFunctionalPage = true;
+    console.info(
+      "[omr] <functional-page-navigator> works only in plugins; outside one, tapping it does nothing, as on WeChat",
+    );
+  }
+}
+
 /** `<web-view>` draws nothing in the page: the shell shows the web page over it. */
 class WxWebView extends Builtin {}
 
@@ -668,6 +684,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-live-player", WxLivePlayer],
   ["wx-live-pusher", WxLivePusher],
   ["wx-voip-room", WxVoipRoom],
+  ["wx-functional-page-navigator", WxFunctionalPageNavigator],
   ["wx-page-container", WxPageContainer],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],
