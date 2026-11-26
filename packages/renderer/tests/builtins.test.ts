@@ -235,3 +235,57 @@ describe("form controls", () => {
     expect(fired).toEqual([]);
   });
 });
+
+describe("selection", () => {
+  test("reports offsets in each text unit, leaves them empty for a boundary outside, and reports the clear once", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const text = (id: string, value: string) => {
+      const el = document.createElement("wx-text");
+      el.id = id;
+      el.setAttribute("user-select", "true");
+      el.textContent = value;
+      return el;
+    };
+    const before = document.createElement("p");
+    before.textContent = "outside";
+    document.body.append(before);
+    const sel = mount("wx-selection", {});
+    sel.append(text("a", "hello "), text("b", "world"));
+    const details: Record<string, unknown>[] = [];
+    sel.addEventListener("omr-event", (event) => {
+      details.push((event as CustomEvent<{ detail: Record<string, unknown> }>).detail.detail);
+    });
+    const next = async () => {
+      document.dispatchEvent(new Event("selectionchange"));
+      await settle();
+      return details.at(-1);
+    };
+
+    sel.omrCall!("selectRange", [4, 8]);
+    expect(await next()).toMatchObject({
+      isCollapsed: false,
+      selectedString: "o wo",
+      firstNodeId: "a",
+      firstOffset: 4,
+      lastNodeId: "b",
+      lastOffset: 2,
+    });
+
+    document
+      .getSelection()!
+      .setBaseAndExtent(before.firstChild!, 3, sel.querySelector("#b")!.firstChild!, 3);
+    const outside = await next();
+    expect(outside).toMatchObject({
+      selectedString: "hello wor",
+      firstNodeId: "",
+      lastNodeId: "b",
+    });
+    expect(outside!.firstOffset).toBeUndefined();
+
+    sel.omrCall!("removeSelection", []);
+    expect(await next()).toMatchObject({ isCollapsed: true, selectedString: "" });
+    const count = details.length;
+    await next();
+    expect(details.length).toBe(count);
+  });
+});

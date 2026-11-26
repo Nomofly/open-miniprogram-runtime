@@ -42,7 +42,7 @@ import {
   WxStoreProduct,
 } from "./components/store-cards.ts";
 import { WxSwiper, WxSwiperItem } from "./components/swiper.ts";
-import { WxText } from "./components/text.ts";
+import { WxSelection, WxText } from "./components/text.ts";
 import { applySpace } from "./components/format.ts";
 
 export type { BuiltinElement, OmrEventDetail } from "./components/base.ts";
@@ -648,6 +648,7 @@ class WxWebView extends Builtin {}
 
 const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-text", WxText],
+  ["wx-selection", WxSelection],
   ["wx-image", WxImage],
   ["wx-cover-image", class extends WxImage {}],
   ["wx-cover-view", WxCoverView],

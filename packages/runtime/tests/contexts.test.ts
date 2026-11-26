@@ -454,6 +454,37 @@ describe("NodesRef.context", () => {
     expect(log().at(-1)).toEqual({ errMsg: "undo:fail no <editor> found" });
   });
 
+  test("a <selection> gives a SelectionContext that drives that very node, without callbacks", async () => {
+    const { view, log, tap, toView } = boot({
+      [PAGE]: {
+        query: `wx.createSelectorQuery().select(".sel").context((res) => { this.sel = res.context; }).exec();`,
+        select: `push(this.sel.selectRange(1, 5));
+          this.sel.setBaseAndExtent("a", 0, "b", 2);
+          this.sel.removeSelection();`,
+      },
+    });
+    await settle();
+    tap("query");
+    await settle();
+    const target = { tag: "selection", id: "", scopeNodeId: 0, nodeKey: 7 };
+    view(1, {
+      type: "queryResult",
+      queryId: toView("query").at(-1)!.queryId,
+      results: [{ context: target }],
+    });
+    await settle();
+    tap("select");
+    await settle();
+    expect(toView("callBuiltin").map(({ target, method, args }) => [target, method, args])).toEqual(
+      [
+        [target, "selectRange", [1, 5]],
+        [target, "setBaseAndExtent", ["a", 0, "b", 2]],
+        [target, "removeSelection", []],
+      ],
+    );
+    expect(log()).toEqual([undefined]);
+  });
+
   test("a <video> gives a VideoContext in its owner's template; other nodes give none", async () => {
     const { view, log, tap, toView } = boot({
       [PAGE]: {

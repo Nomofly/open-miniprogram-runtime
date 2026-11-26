@@ -1290,6 +1290,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
               tag: el.localName.slice(3),
               id: el.id,
               scopeNodeId: state.ownerId,
+              nodeKey: keyOf(el),
               canvasId:
                 state.props["canvas-id"] === undefined
                   ? undefined

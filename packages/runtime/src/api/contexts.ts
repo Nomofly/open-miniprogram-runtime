@@ -401,6 +401,28 @@ export function createContextApis(ctx: ApiContext) {
   });
 
   /**
+   * The SelectionContext of a `<selection>`: it sets or clears the selection in
+   * that very component. Its methods return nothing and take no callbacks.
+   */
+  const selectionContext = (webviewId: number, target: ContextNode) => {
+    const call = (method: string, args: unknown[]) => {
+      host.callBuiltin(webviewId, target, method, args.map(plain)).catch((error: unknown) => {
+        console.warn(`[omr] SelectionContext.${method}: ${(error as Error).message}`);
+      });
+    };
+    return {
+      selectRange: (start: number, end: number) => call("selectRange", [start, end]),
+      setBaseAndExtent: (
+        anchorNodeId: string,
+        anchorOffset: number,
+        focusNodeId: string,
+        focusOffset: number,
+      ) => call("setBaseAndExtent", [anchorNodeId, anchorOffset, focusNodeId, focusOffset]),
+      removeSelection: () => call("removeSelection", []),
+    };
+  };
+
+  /**
    * `NodesRef.context`: the context of a node the view described, in the page
    * it is on. A legacy `<canvas>` is found by its `canvas-id` in the query's
    * component; nodes without a context have none.
@@ -420,6 +442,8 @@ export function createContextApis(ctx: ApiContext) {
         return livePlayerContext(id, scope);
       case "live-pusher":
         return livePusherContext(node.id, scope);
+      case "selection":
+        return selectionContext(webviewId, node);
       case "canvas":
         return node.canvasId === undefined || node.canvasType
           ? undefined
