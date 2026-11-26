@@ -24,9 +24,12 @@ const PHOTO_HEIGHT = 800;
 /** `startRecord` stops by itself after `timeout` seconds: 30 by default, at most 5 minutes. */
 const RECORD_TIMEOUT_S = 30;
 const RECORD_MAX_S = 300;
-/** Generated camera frames, whatever `frame-size` asks for. */
-const FRAME_WIDTH = 240;
-const FRAME_HEIGHT = 320;
+/** The size of generated camera frames for each `frame-size`; WeChat leaves the exact size to the system. */
+const FRAME_SIZES: Record<string, [number, number]> = {
+  small: [144, 192],
+  medium: [240, 320],
+  large: [480, 640],
+};
 const FRAME_MS = 100;
 
 const VIDEO_METHODS = [
@@ -313,20 +316,24 @@ export function createContextApis(ctx: ApiContext) {
         };
         const deliver = () => {
           const webviewId = webviewOf();
-          if (webviewId === undefined || !ctx.cameraState(webviewId)?.ready) {
+          const state = webviewId === undefined ? undefined : ctx.cameraState(webviewId);
+          if (!state || state.error) {
             stop();
             return;
           }
-          const data = new Uint8Array(FRAME_WIDTH * FRAME_HEIGHT * 4);
+          // A camera stopped in the background sends no frames until the app comes back
+          if (!state.ready) return;
+          const [width, height] = FRAME_SIZES[state.frameSize ?? ""] ?? FRAME_SIZES.medium!;
+          const data = new Uint8Array(width * height * 4);
           const shift = (count++ * 4) % 256;
           for (let i = 0; i < data.length; i += 4) {
             const pixel = i / 4;
-            data[i] = ((pixel % FRAME_WIDTH) + shift) % 256;
-            data[i + 1] = (Math.floor(pixel / FRAME_WIDTH) + shift) % 256;
+            data[i] = ((pixel % width) + shift) % 256;
+            data[i + 1] = (Math.floor(pixel / width) + shift) % 256;
             data[i + 2] = 128;
             data[i + 3] = 255;
           }
-          safeCall(callback, { width: FRAME_WIDTH, height: FRAME_HEIGHT, data: data.buffer });
+          safeCall(callback, { width, height, data: data.buffer });
         };
         return {
           start: cameraApi(async () => {

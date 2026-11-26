@@ -13,7 +13,7 @@ import {
 } from "./api/common.ts";
 import type { ApiContext, WxHost } from "./api/context.ts";
 import { createCanvasApis } from "./api/canvas.ts";
-import { createDeviceApis } from "./api/device.ts";
+import { createDeviceApis, scannedCode } from "./api/device.ts";
 import { createFileApis, createTempFiles } from "./api/files.ts";
 import { createInterfaceApis } from "./api/interface.ts";
 import { createMediaApis } from "./api/media.ts";
@@ -524,15 +524,33 @@ export function createWx(host: WxHost) {
   };
 
   /** Each `<camera>` that is on a page, with the release of its preview once it shows one. */
-  const cameras = new Map<string, { release?: () => void; error?: string }>();
+  type CameraEntry = {
+    webviewId: number;
+    cameraId: number;
+    frameSize?: string;
+    release?: () => void;
+    error?: string;
+  };
+  const cameras = new Map<string, CameraEntry>();
+  /** Whether the app is in the background, which stops every camera. */
+  let camerasStopped = false;
   /** A `<camera>` was inserted or removed; it needs the privacy agreement and `scope.camera`. */
-  const cameraMounted = async (webviewId: number, cameraId: number, mounted: boolean) => {
+  const cameraMounted = async (
+    webviewId: number,
+    cameraId: number,
+    mounted: boolean,
+    options: { mode?: string; frameSize?: string } = {},
+  ) => {
     const key = `${webviewId}:${cameraId}`;
     cameras.get(key)?.release?.();
     cameras.delete(key);
     if (!mounted) return;
     // A camera moved in the DOM is removed and inserted again; only the latest insertion counts
-    const entry: { release?: () => void; error?: string } = {};
+    const entry: CameraEntry = {
+      webviewId,
+      cameraId,
+      frameSize: options.frameSize,
+    };
     cameras.set(key, entry);
     let error: string | undefined;
     try {
@@ -544,7 +562,26 @@ export function createWx(host: WxHost) {
     if (cameras.get(key) !== entry) return;
     entry.error = error;
     if (!error) entry.release = holdPermission("camera");
-    host.sendView(webviewId, { type: "cameraState", cameraId, error });
+    host.sendView(webviewId, {
+      type: "cameraState",
+      cameraId,
+      error,
+      ...(!error && options.mode === "scanCode" ? { scan: cameraScan() } : {}),
+      ...(!error && camerasStopped ? { stopped: true } : {}),
+    });
+  };
+  /** The `scancode` detail of a camera in `scanCode` mode, which sees the code `wx.scanCode` reads. */
+  const cameraScan = () => {
+    const { scanType, result, charSet, rawData } = scannedCode(ctx);
+    return { type: scanType, result, charSet, rawData };
+  };
+  /** Going to the background stops each camera that shows its preview (`bindstop`); coming back starts it again. */
+  const stopCameras = (stopped: boolean) => {
+    if (camerasStopped === stopped) return;
+    camerasStopped = stopped;
+    for (const { webviewId, cameraId, release } of cameras.values()) {
+      if (release) host.sendView(webviewId, { type: "cameraState", cameraId, stopped });
+    }
   };
   /** A page is gone with everything it was using. */
   const releasePage = (webviewId: number) => {
@@ -947,8 +984,10 @@ export function createWx(host: WxHost) {
     requestScope,
     holdPermission,
     cameraState: (webviewId) => {
-      for (const [key, { release, error }] of cameras) {
-        if (key.startsWith(`${webviewId}:`)) return { ready: release !== undefined, error };
+      for (const [key, { release, error, frameSize }] of cameras) {
+        if (key.startsWith(`${webviewId}:`)) {
+          return { ready: release !== undefined && !camerasStopped, error, frameSize };
+        }
       }
       return undefined;
     },
@@ -994,6 +1033,7 @@ export function createWx(host: WxHost) {
     openTypeDetail,
     nicknameFocus,
     cameraMounted,
+    stopCameras,
     observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
       observerApis.receive(...args),
     releasePage,

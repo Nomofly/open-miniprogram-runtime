@@ -1531,7 +1531,7 @@ export function startLogic(
         void wxApi!.nicknameFocus(message.focused, record.webviewId);
         break;
       case "camera":
-        void wxApi!.cameraMounted(record.webviewId, message.cameraId, message.mounted);
+        void wxApi!.cameraMounted(record.webviewId, message.cameraId, message.mounted, message);
         break;
       case "animationDone":
         wxApi!.animationDone(record.webviewId, message.animationId);
@@ -1791,6 +1791,7 @@ export function startLogic(
     hidePage(stack[stack.length - 1]);
     callHook(app, "onHide");
     wxApi.app.emit("AppHide", {});
+    wxApi.stopCameras(true);
   };
   const appShow = (scene = 1001) => {
     if (!wxApi || !inBackground) return;
@@ -1805,6 +1806,7 @@ export function startLogic(
     };
     callHook(app, "onShow", toJsonValue(enterOptions));
     wxApi.app.emit("AppShow", toJsonValue(enterOptions));
+    wxApi.stopCameras(false);
     showPage(top);
   };
   const changeTheme = (next: Theme) => {

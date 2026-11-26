@@ -13,8 +13,12 @@ export interface BuiltinElement extends HTMLElement {
   omrReplaceValue?(value: string): void;
   /** Fills `<input type="nickname">` with the nickname the user chose above the keyboard. */
   omrFill?(value: string): void;
-  /** Tells a `<camera>` whether it may show its preview; `error` is its `binderror` message when not. */
-  omrCameraState?(error?: string): void;
+  /** Tells a `<camera>` whether it may show its preview, what it scans in `scanCode` mode, and when the background stops it. */
+  omrCameraState?(state: {
+    error?: string;
+    scan?: Record<string, unknown>;
+    stopped?: boolean;
+  }): void;
   /** A method of the component's context, such as `play` of `VideoContext`; throws the fail reason. */
   omrCall?(
     method: string,

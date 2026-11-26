@@ -53,6 +53,13 @@ export const DEFAULT_LOCATION = {
 
 const SCAN_DEFAULT = { result: "https://example.com/omr", scanType: "QR_CODE", charSet: "utf-8" };
 
+/** The code the simulated camera sees: `config.scanCode` over a default, with its bytes in base64. */
+export function scannedCode(ctx: ApiContext) {
+  const scanned = { ...SCAN_DEFAULT, ...ctx.host.manifest.config.scanCode };
+  const bytes = new TextEncoder().encode(scanned.result);
+  return { ...scanned, rawData: btoa(String.fromCharCode(...bytes)) };
+}
+
 /** Renames the `errno` of a failure to the `errCode` some open APIs document instead. */
 const withErrCode =
   (api: (options: Options) => unknown) =>
@@ -248,18 +255,14 @@ export function createDeviceApis(ctx: ApiContext): Record<string, unknown> {
 
     // Scanning
     scanCode: asyncApi("scanCode", async (options) => {
-      const scanned = { ...SCAN_DEFAULT, ...config.scanCode };
+      const scanned = scannedCode(ctx);
       const result = await ask(
         "scanCode",
         { result: scanned.result, onlyFromCamera: Boolean(options.onlyFromCamera) },
         { allow: { scanned: true }, deny: {} },
       );
       if (result.scanned !== true) throw new Error("cancel");
-      const bytes = new TextEncoder().encode(scanned.result);
-      return {
-        ...scanned,
-        rawData: btoa(String.fromCharCode(...bytes)),
-      };
+      return scanned;
     }),
 
     // Screen, battery and vibration

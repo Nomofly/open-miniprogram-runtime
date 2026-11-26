@@ -994,12 +994,17 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   // <camera> asks the logic layer for scope.camera when it is inserted
   const cameras = new Map<number, BuiltinElement>();
   document.addEventListener("omr-camera", (event) => {
-    const { camera, mounted } = (
-      event as CustomEvent<{ camera: BuiltinElement & { cameraId: number }; mounted: boolean }>
+    const { camera, mounted, mode, frameSize } = (
+      event as CustomEvent<{
+        camera: BuiltinElement & { cameraId: number };
+        mounted: boolean;
+        mode: string;
+        frameSize: string;
+      }>
     ).detail;
     if (mounted) cameras.set(camera.cameraId, camera);
     else cameras.delete(camera.cameraId);
-    post({ type: "camera", cameraId: camera.cameraId, mounted });
+    post({ type: "camera", cameraId: camera.cameraId, mounted, mode, frameSize });
   });
 
   // Pull-down refresh: the page slides down over the window background, which shows three dots
@@ -1306,7 +1311,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         nicknameInput?.omrFill?.(message.value);
         return;
       case "cameraState":
-        cameras.get(message.cameraId)?.omrCameraState?.(message.error);
+        cameras.get(message.cameraId)?.omrCameraState?.(message);
         return;
       case "animate":
       case "clearAnimation": {

@@ -472,22 +472,48 @@ function buildRichNode(node: unknown, options: RichTextOptions): Node[] {
 
 let nextCameraId = 0;
 
+const FLASH_LABELS: Record<string, string> = {
+  auto: "自动",
+  on: "打开",
+  off: "关闭",
+  torch: "常亮",
+};
+
 /**
  * The camera, a native component: it stays black until the logic layer has the
  * user's `scope.camera`, then shows a simulated preview and fires `initdone`.
+ * In `scanCode` mode, tapping the preview is the camera seeing the code
+ * `wx.scanCode` reads, which fires `scancode`. Going to the background stops it
+ * (`stop`) and coming back shows the preview again.
  */
 class WxCamera extends Builtin {
   readonly cameraId = ++nextCameraId;
   private readonly preview: HTMLElement;
+  private readonly label: HTMLElement;
+  private readonly scanFrame: HTMLElement;
   private mounted = false;
+  /** The `scancode` detail while the camera shows its preview in `scanCode` mode. */
+  private scan?: Record<string, unknown>;
   constructor() {
     super();
     const root = this.shadow(`<style>
       :host { display: block; position: relative; width: 100%; height: 300px; background: #000; overflow: hidden; }
-      .preview { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 35% 40%, #5b6470, #262a30 70%); color: rgba(255, 255, 255, 0.6); font: 13px/1.4 sans-serif; }
+      .preview { position: absolute; inset: 0; color: rgba(255, 255, 255, 0.7); font: 12px/1.4 sans-serif; }
       .preview[hidden] { display: none; }
-    </style><div class="preview" hidden>模拟摄像头画面</div><slot></slot>`);
+      .scene { position: absolute; inset: 0; background: radial-gradient(circle at 30% 35%, #6b7480, #262a30 70%); }
+      .scene::after { content: ""; position: absolute; left: 62%; top: 55%; width: 22%; height: 30%; border-radius: 8px; background: rgba(255, 255, 255, 0.12); }
+      .front .scene { transform: scaleX(-1); }
+      .torch .scene { filter: brightness(1.5); }
+      .label { position: absolute; left: 8px; bottom: 6px; }
+      .scan { position: absolute; left: 50%; top: 50%; width: 55%; aspect-ratio: 1; max-height: 70%; transform: translate(-50%, -50%); border: 1px solid rgba(7, 193, 96, 0.8); box-sizing: border-box; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; color: #fff; }
+      .scan[hidden] { display: none; }
+    </style><div class="preview" hidden><div class="scene"></div><div class="scan" hidden>点击画面模拟扫到码</div><div class="label"></div></div><slot></slot>`);
     this.preview = root.querySelector(".preview")!;
+    this.label = root.querySelector(".label")!;
+    this.scanFrame = root.querySelector(".scan")!;
+    this.preview.addEventListener("click", () => {
+      if (this.scan && !this.preview.hidden) emit(this, "scancode", this.scan);
+    });
   }
   connectedCallback(): void {
     this.announce(true);
@@ -495,17 +521,40 @@ class WxCamera extends Builtin {
   disconnectedCallback(): void {
     this.announce(false);
   }
+  protected override update(): void {
+    const front = this.str("device-position") === "front";
+    const flash = this.str("flash", "auto");
+    this.preview.classList.toggle("front", front);
+    this.preview.classList.toggle("torch", flash === "torch");
+    this.label.textContent = `模拟摄像头画面 · ${front ? "前置" : "后置"} · 闪光灯${FLASH_LABELS[flash] ?? FLASH_LABELS.auto}`;
+  }
   private announce(mounted: boolean): void {
     if (mounted === this.mounted) return;
     this.mounted = mounted;
     if (!mounted) this.preview.hidden = true;
-    document.dispatchEvent(new CustomEvent("omr-camera", { detail: { camera: this, mounted } }));
+    // `mode` and `frame-size` only count when the camera is inserted
+    const mode = this.str("mode", "normal");
+    const frameSize = this.str("frame-size", "medium");
+    document.dispatchEvent(
+      new CustomEvent("omr-camera", { detail: { camera: this, mounted, mode, frameSize } }),
+    );
   }
-  omrCameraState(error?: string): void {
+  omrCameraState(state: {
+    error?: string;
+    scan?: Record<string, unknown>;
+    stopped?: boolean;
+  }): void {
     if (!this.mounted) return;
-    this.preview.hidden = error !== undefined;
-    if (error === undefined) emit(this, "initdone", { maxZoom: 1 });
-    else emit(this, "error", { errMsg: error });
+    if (state.error !== undefined) {
+      this.preview.hidden = true;
+      emit(this, "error", { errMsg: state.error });
+      return;
+    }
+    if (state.scan) this.scan = state.scan;
+    this.scanFrame.hidden = !this.scan;
+    this.preview.hidden = state.stopped === true;
+    if (state.stopped === true) emit(this, "stop", {});
+    else if (state.stopped === undefined) emit(this, "initdone", { maxZoom: 1 });
   }
 }
 

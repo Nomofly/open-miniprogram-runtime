@@ -836,6 +836,46 @@ describe("logic layer", () => {
     ]);
   });
 
+  test("a scanCode camera sees the configured code, and the background stops and restarts it", async () => {
+    const { sent, handle, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ frames() {
+          const listener = wx.createCameraContext().onCameraFrame((frame) => {
+            getApp().log.push([frame.width, frame.height]);
+            listener.stop();
+          });
+          listener.start();
+        } });`,
+      },
+      { pages: ["pages/index/index"] },
+      {
+        auth: { privacy: { agreed: true }, authSetting: { "scope.camera": true } },
+        scanCode: { result: "hello", scanType: "QR_CODE" },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "camera", cameraId: 1, mounted: true, mode: "scanCode", frameSize: "small" });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(toView(sent, "cameraState")).toEqual([
+      {
+        type: "cameraState",
+        cameraId: 1,
+        scan: { type: "QR_CODE", result: "hello", charSet: "utf-8", rawData: btoa("hello") },
+      },
+    ]);
+    currentPage().frames();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect((globalThis as any).getApp().log).toEqual([[144, 192]]);
+
+    handle({ type: "appHide" });
+    handle({ type: "appShow" });
+    expect(toView(sent, "cameraState").slice(1)).toEqual([
+      { type: "cameraState", cameraId: 1, stopped: true },
+      { type: "cameraState", cameraId: 1, stopped: false },
+    ]);
+  });
+
   test("a camera moved while it waits for consent shows in the capsule once", async () => {
     const { sent, handle, view } = boot(
       { "app.js": APP, "pages/index/index.js": `Page({});` },

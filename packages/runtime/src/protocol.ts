@@ -175,8 +175,8 @@ export type ViewToLogic =
     }
   /** An `<input type="nickname">` gained or lost focus. */
   | { type: "nickname"; focused: boolean }
-  /** A `<camera>` was inserted into or removed from the page. */
-  | { type: "camera"; cameraId: number; mounted: boolean }
+  /** A `<camera>` was inserted into or removed from the page, with its `mode` and `frame-size`, which only count then. */
+  | { type: "camera"; cameraId: number; mounted: boolean; mode?: string; frameSize?: string }
   | {
       type: "attach";
       nodeId: number;
@@ -248,8 +248,18 @@ export type LogicToView =
   | { type: "pageScrollTo"; scrollTop: number; duration: number }
   /** The user chose their WeChat nickname above the keyboard of the focused nickname input. */
   | { type: "fillNickname"; value: string }
-  /** Whether a `<camera>` may show its preview; `error` is the `binderror` message when not. */
-  | { type: "cameraState"; cameraId: number; error?: string }
+  /**
+   * Whether a `<camera>` may show its preview; `error` is the `binderror` message when not.
+   * `scan` is the `scancode` detail of a camera in `scanCode` mode. `stopped` is true when the
+   * app went to the background, which stops the camera, and false when it came back.
+   */
+  | {
+      type: "cameraState";
+      cameraId: number;
+      error?: string;
+      scan?: Record<string, unknown>;
+      stopped?: boolean;
+    }
   /** `this.animate`: plays WeChat keyframes on the elements a selector finds in a page's or component's template. */
   | {
       type: "animate";
