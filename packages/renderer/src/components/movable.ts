@@ -1,8 +1,68 @@
 /** `<movable-area>` and `<movable-view>`: a view the user drags, and the area that bounds it. */
 import { Applied, Builtin, animate, emit, lengthOf, trackDrag } from "./base.ts";
 
+/**
+ * Follows a two-finger pinch on an element: `scale` gets the distance between
+ * the fingers over their distance when the second one touched.
+ */
+function trackPinch(el: HTMLElement, handlers: { start(): boolean; scale(ratio: number): void }) {
+  const points = new Map<number, { x: number; y: number }>();
+  let startDistance = 0;
+  const distance = () => {
+    const [a, b] = [...points.values()];
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  };
+  const move = (event: PointerEvent) => {
+    if (!points.has(event.pointerId)) return;
+    points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (startDistance > 0) handlers.scale(distance() / startDistance);
+  };
+  const up = (event: PointerEvent) => {
+    points.delete(event.pointerId);
+    if (points.size < 2) startDistance = 0;
+    if (points.size === 0) {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    }
+  };
+  el.addEventListener("pointerdown", (event) => {
+    if (points.size === 0) {
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    }
+    points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (points.size === 2 && handlers.start()) startDistance = distance() || 0;
+  });
+}
+
 export class WxMovableArea extends Builtin {
   private readonly resize = new ResizeObserver(() => this.views().forEach((view) => view.fit()));
+  constructor() {
+    super();
+    // With `scale-area`, a pinch or wheel anywhere in the area scales its views that scale
+    let pinched: WxMovableView[] = [];
+    trackPinch(this, {
+      start: () => {
+        pinched = this.flag("scale-area") ? this.views().filter((view) => view.scalable()) : [];
+        pinched.forEach((view) => view.pinchStart());
+        return pinched.length > 0;
+      },
+      scale: (ratio) => pinched.forEach((view) => view.pinchTo(ratio)),
+    });
+    this.addEventListener(
+      "wheel",
+      (event) => {
+        if (!this.flag("scale-area")) return;
+        const views = this.views().filter((view) => view.scalable());
+        if (views.length === 0) return;
+        event.preventDefault();
+        views.forEach((view) => view.wheelZoom(event.deltaY));
+      },
+      { passive: false },
+    );
+  }
   connectedCallback(): void {
     this.resize.observe(this);
   }
@@ -84,15 +144,42 @@ export class WxMovableView extends Builtin {
         }
       },
     });
+    // A pinch on the view scales it, unless its area takes pinches anywhere (`scale-area`)
+    trackPinch(this, {
+      start: () => {
+        if (!this.scalable() || this.inScaleArea()) return false;
+        this.pinchStart();
+        return true;
+      },
+      scale: (ratio) => this.pinchTo(ratio),
+    });
     this.addEventListener(
       "wheel",
       (event) => {
-        if (!this.flag("scale") || this.flag("disabled")) return;
+        if (!this.scalable() || this.inScaleArea()) return;
         event.preventDefault();
-        this.zoom(this.scale * Math.exp(-event.deltaY / 300), true);
+        this.wheelZoom(event.deltaY);
       },
       { passive: false },
     );
+  }
+  /** Whether the user can scale the view: `scale` and not `disabled`. */
+  scalable(): boolean {
+    return this.flag("scale") && !this.flag("disabled");
+  }
+  private inScaleArea(): boolean {
+    const area = this.parentElement;
+    return area instanceof WxMovableArea && Boolean(area.props["scale-area"]);
+  }
+  private pinchScale = 1;
+  pinchStart(): void {
+    this.pinchScale = this.scale;
+  }
+  pinchTo(ratio: number): void {
+    this.zoom(this.pinchScale * ratio, true);
+  }
+  wheelZoom(deltaY: number): void {
+    this.zoom(this.scale * Math.exp(-deltaY / 300), true);
   }
   connectedCallback(): void {
     this.resize.observe(this);

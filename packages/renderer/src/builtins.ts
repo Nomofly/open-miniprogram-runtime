@@ -731,6 +731,8 @@ wx-keyboard-accessory:not(.omr-keyboard-accessory-shown) { display: none !import
 wx-keyboard-accessory.omr-keyboard-accessory-shown { position: fixed !important; left: 0 !important; right: 0 !important; max-height: 200px; overflow: hidden; z-index: 10001; }
 wx-cover-view { line-height: 1.2; white-space: nowrap; overflow: hidden; }
 wx-movable-area { position: relative; width: 10px; height: 10px; }
+/* A pinch anywhere in a scale-area scales its views instead of the page */
+wx-movable-area[scale-area] { touch-action: none; }
 wx-text { white-space: pre-line; }
 wx-text[space] { white-space: pre-wrap; }
 wx-text[user-select], wx-text[selectable] { user-select: text; cursor: text; }
