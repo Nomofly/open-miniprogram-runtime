@@ -22,6 +22,7 @@ import { createAnimations } from "./animation.ts";
 import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
 import { setAdConfig } from "./components/ad.ts";
+import { emit, lengthOf } from "./components/base.ts";
 import { setMapLocation } from "./components/map.ts";
 import { setStreetsUrl } from "./components/region.ts";
 import {
@@ -36,6 +37,8 @@ import {
 export interface ViewOptions {
   bundle: WebviewBundle;
   windowWidth: number;
+  /** How tall the simulated keyboard of a focused input is; 0 draws none. */
+  keyboardHeight?: number;
   /** What a non-zero rpx value that rounds to 0 becomes: 0.5 on iOS devices with a pixel ratio above 1, else 1. */
   hairline?: number;
   /** URL prefix the Mini Program's files are served at, such as `/__omr/files/`. */
@@ -1009,6 +1012,73 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   /** Inputs waiting for their bindinput handler's result, with the value the handler saw. */
   const inputReplies = new Map<number, { input: BuiltinElement; value: string }>();
   let nextReplyId = 0;
+
+  // A focused <input> or <textarea> raises the simulated keyboard: the page moves up so the
+  // field and its cursor-spacing stay above it (adjust-position), keyboard-accessory shows on
+  // top of it, and the field and wx.onKeyboardHeightChange hear its height
+  const keyboardHeight = options.keyboardHeight ?? 0;
+  let keyboardInput: BuiltinElement | undefined;
+  let keyboardUp = false;
+  const accessoryOf = (input: Element) =>
+    input.querySelector<HTMLElement>(":scope > wx-keyboard-accessory");
+  const lowerKeyboard = (input: BuiltinElement) => {
+    accessoryOf(input)?.classList.remove("omr-keyboard-accessory-shown");
+    if (keyboardInput !== input) return;
+    keyboardInput = undefined;
+    // Focus moving to another field keeps the keyboard up
+    setTimeout(() => {
+      if (keyboardInput || !keyboardUp) return;
+      keyboardUp = false;
+      emit(input, "keyboardheightchange", { height: 0, duration: 0.25 });
+      post({ type: "keyboard", height: 0, offset: 0 });
+    }, 0);
+  };
+  document.addEventListener("omr-keyboard", (event) => {
+    const detail = (
+      event as CustomEvent<{ input: BuiltinElement; focused: boolean; height: number }>
+    ).detail;
+    const { input, focused } = detail;
+    if (!keyboardHeight) return;
+    if (!focused) {
+      lowerKeyboard(input);
+      return;
+    }
+    keyboardInput = input;
+    keyboardUp = true;
+    detail.height = keyboardHeight;
+    const props = states.get(input)?.props ?? {};
+    const adjust = props["adjust-position"] === undefined || Boolean(props["adjust-position"]);
+    const spacing = lengthOf(props["cursor-spacing"], 0);
+    // The accessory rises with the keyboard, so the field stays above both
+    const accessory = accessoryOf(input);
+    accessory?.classList.add("omr-keyboard-accessory-shown");
+    const covered = keyboardHeight + (accessory?.offsetHeight ?? 0);
+    const { top, bottom } = input.getBoundingClientRect();
+    // The page moves up only as far as the field's bottom needs, and never past the field's top
+    const offset = adjust
+      ? Math.max(0, Math.min(top, bottom + spacing - (window.innerHeight - covered)))
+      : 0;
+    if (accessory) accessory.style.bottom = `${keyboardHeight - offset}px`;
+    emit(input, "keyboardheightchange", { height: keyboardHeight, duration: 0.25 });
+    post({ type: "keyboard", height: keyboardHeight, offset: Math.round(offset) });
+  });
+  // Taps on a keyboard-accessory, or on the page while a hold-keyboard field has focus, keep the keyboard up
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      if (!keyboardInput || !(event.target instanceof Element)) return;
+      const target = event.target;
+      if (target.closest("wx-keyboard-accessory")) {
+        event.preventDefault();
+      } else if (
+        states.get(keyboardInput)?.props["hold-keyboard"] &&
+        !target.closest("input, textarea, [contenteditable]")
+      ) {
+        event.preventDefault();
+      }
+    },
+    true,
+  );
 
   // <input type="nickname"> asks the logic layer for the system nickname bar while it has focus
   let nicknameInput: BuiltinElement | undefined;

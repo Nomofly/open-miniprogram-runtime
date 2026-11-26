@@ -108,6 +108,23 @@ html[data-frame="0"] #omr-device {
   fill: currentColor;
 }
 
+/* The simulated keyboard: above the tab bar, below the system dialogs */
+.omr-keyboard {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #d1d4d9;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+.omr-keyboard[hidden] {
+  display: none;
+}
 .omr-navbar {
   position: absolute;
   top: 0;
@@ -612,12 +629,14 @@ html[data-frame="0"] #omr-device {
 }
 
 /* The bar WeChat shows above the keyboard of <input type="nickname">: a full-width card, label over nickname */
+/* Above the simulated keyboard */
 .omr-nickname-bar {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  padding: 8px 8px 34px;
+  bottom: var(--omr-keyboard-height, 0);
+  z-index: 21;
+  padding: 8px;
   background: #e5e5e5;
 }
 .omr-nickname-option {

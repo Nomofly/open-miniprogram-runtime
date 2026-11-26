@@ -15,6 +15,8 @@ export interface WebviewInit {
   webviewId: number;
   bundle: WebviewBundle;
   windowWidth: number;
+  /** How tall the simulated keyboard is. */
+  keyboardHeight: number;
   hairline: number;
   styleV2: boolean;
   /** Whether built-in components take their dark defaults: app.json `"darkmode": true` in the dark theme. */
@@ -45,6 +47,7 @@ addEventListener("message", (event: MessageEvent<FromShell>) => {
     handle = startView({
       bundle: data.bundle,
       windowWidth: data.windowWidth,
+      keyboardHeight: data.keyboardHeight,
       hairline: data.hairline,
       assetBase: "/__omr/files/",
       styleV2: data.styleV2,

@@ -159,6 +159,8 @@ function showPermissionsInUse(reported: PermissionKind[]): void {
         .join("")
     : CAPSULE_DOTS;
 }
+// The nickname bar of <input type="nickname"> sits on the simulated keyboard
+document.documentElement.style.setProperty("--omr-keyboard-height", `${device.keyboardHeight}px`);
 const tabBarEl = el("div", "omr-tabbar");
 tabBarEl.style.height = `${TAB_BAR_HEIGHT + device.safeAreaBottom}px`;
 tabBarEl.style.paddingBottom = `${device.safeAreaBottom}px`;
@@ -328,6 +330,7 @@ function createPage(entry: StackEntry): PageView {
         webviewId: entry.webviewId,
         bundle,
         windowWidth: device.screenWidth,
+        keyboardHeight: device.keyboardHeight,
         hairline: device.platform === "ios" && device.pixelRatio > 1 ? 0.5 : 1,
         styleV2,
         dark: darkmode && theme === "dark",
@@ -340,7 +343,11 @@ function createPage(entry: StackEntry): PageView {
       iframe.contentWindow?.postMessage(init, "*");
     })
     .catch((error: unknown) => container.append(el("div", "omr-fatal", (error as Error).message)));
-  container.append(navbar, iframe);
+  // The simulated keyboard of a focused input; typing still comes from the computer's keyboard
+  const keyboard = el("div", "omr-keyboard", "模拟键盘 · 请用电脑键盘输入");
+  keyboard.hidden = true;
+  keyboard.style.height = `${device.keyboardHeight}px`;
+  container.append(navbar, iframe, keyboard);
   pagesLayer.append(container);
   const page: PageView = {
     entry,
@@ -548,6 +555,15 @@ logic.port1.addEventListener("message", (event: MessageEvent<LogicToShell>) => {
     case "permissionsInUse":
       showPermissionsInUse(message.kinds);
       break;
+    case "keyboard": {
+      // The keyboard rises over the page, and the page's WebView moves up by the offset that keeps the input above it
+      const page = pages.get(message.webviewId);
+      const keyboard = page?.el.querySelector<HTMLElement>(".omr-keyboard");
+      if (!page || !keyboard) break;
+      keyboard.hidden = message.height === 0;
+      page.iframe.style.transform = message.offset ? `translateY(${-message.offset}px)` : "";
+      break;
+    }
     case "videoFullScreen":
       // style.css grows the page's WebView to the whole screen and hides the chrome while it is shown
       pages

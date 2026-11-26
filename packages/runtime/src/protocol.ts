@@ -221,6 +221,8 @@ export type ViewToLogic =
   | { type: "navigationBar"; attributes: Record<string, unknown> }
   /** A `<video>` of the page entered full screen, or the last one left it. */
   | { type: "videoFullScreen"; fullScreen: boolean }
+  /** The simulated keyboard rose (`height`) or went down (0); `offset` is how far the page moves up for `adjust-position`. */
+  | { type: "keyboard"; height: number; offset: number }
   /** A long press on an `<image show-menu-by-longpress>`. */
   | { type: "imageMenu" }
   /** An `<official-account>` was inserted and asks whether it may show. */
@@ -542,6 +544,8 @@ export type LogicToShell =
   | { type: "permissionsInUse"; kinds: PermissionKind[] }
   /** A page's full-screen `<video>` covers the whole screen: the shell raises its WebView over the chrome, or puts it back. */
   | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean }
+  /** Shows the simulated keyboard over a page, `height` tall, or hides it (0), and moves the page's WebView up by `offset`. */
+  | { type: "keyboard"; webviewId: number; height: number; offset: number }
   /** Opens `src` in a WebView over the page, or closes it without `src`. */
   | { type: "webView"; webviewId: number; src?: string }
   /** The Mini Program left for WeChat (`wx.exitMiniProgram`), as the capsule's close button does. */

@@ -34,10 +34,16 @@ export class WxInput extends Builtin {
     });
     field.addEventListener("focus", () => {
       this.focusValue = field.value;
-      emit(this, "focus", { value: field.value, height: 0 });
+      // The view raises the simulated keyboard and answers its height, which the focus event reports
+      const keyboard = { input: this, focused: true, height: 0 };
+      document.dispatchEvent(new CustomEvent("omr-keyboard", { detail: keyboard }));
+      emit(this, "focus", { value: field.value, height: keyboard.height });
       if (this.isNickname()) this.announceNicknameFocus(true);
     });
     field.addEventListener("blur", () => {
+      document.dispatchEvent(
+        new CustomEvent("omr-keyboard", { detail: { input: this, focused: false, height: 0 } }),
+      );
       emit(this, "blur", { value: field.value, cursor: field.selectionStart ?? 0 });
       if (field.value !== this.focusValue) emit(this, "change", { value: field.value });
       if (!this.isNickname()) return;

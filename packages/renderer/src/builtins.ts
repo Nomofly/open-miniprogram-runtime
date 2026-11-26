@@ -707,7 +707,11 @@ wx-view, wx-cover-view, wx-form, wx-navigator, wx-picker, wx-movable-area, wx-pi
 wx-list-view, wx-sticky-header, wx-sticky-section, wx-draggable-sheet, wx-nested-scroll-header, wx-nested-scroll-body, wx-list-builder, wx-grid-builder, wx-open-container, wx-snapshot, wx-large-image, wx-open-data-item, wx-open-data-list { display: block; }
 wx-sticky-header { position: sticky; top: 0; z-index: 1; }
 :is(wx-tap-gesture-handler, wx-double-tap-gesture-handler, wx-pan-gesture-handler, wx-scale-gesture-handler, wx-long-press-gesture-handler, wx-force-press-gesture-handler, wx-horizontal-drag-gesture-handler, wx-vertical-drag-gesture-handler) { display: contents; }
-wx-page-meta, wx-keyboard-accessory, wx-editor-portal { display: none; }
+wx-page-meta, wx-editor-portal { display: none; }
+/* Shown only on the simulated keyboard of its focused field; the page's styles may lay it out, up to 200px tall */
+wx-keyboard-accessory:not(.omr-keyboard-accessory-shown) { display: none !important; }
+:where(wx-keyboard-accessory) { display: block; }
+wx-keyboard-accessory.omr-keyboard-accessory-shown { position: fixed !important; left: 0 !important; right: 0 !important; max-height: 200px; overflow: hidden; z-index: 10001; }
 wx-cover-view { line-height: 1.2; white-space: nowrap; overflow: hidden; }
 wx-movable-area { position: relative; width: 10px; height: 10px; }
 wx-text { white-space: pre-line; }

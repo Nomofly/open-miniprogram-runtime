@@ -12,6 +12,8 @@ export interface Device {
   navigationBarHeight: number;
   /** Height of the home indicator area below the tab bar. */
   safeAreaBottom: number;
+  /** Height of the system keyboard with its suggestion bar, from the bottom of the screen. */
+  keyboardHeight: number;
 }
 
 /** Device presets, selected with `?device=` on the simulator URL. */
@@ -27,6 +29,7 @@ export const DEVICES: Record<string, Device> = {
     statusBarHeight: 59,
     navigationBarHeight: 44,
     safeAreaBottom: 34,
+    keyboardHeight: 336,
   },
   "iphone-se": {
     brand: "iPhone",
@@ -39,6 +42,7 @@ export const DEVICES: Record<string, Device> = {
     statusBarHeight: 20,
     navigationBarHeight: 44,
     safeAreaBottom: 0,
+    keyboardHeight: 260,
   },
   pixel: {
     brand: "Google",
@@ -51,6 +55,7 @@ export const DEVICES: Record<string, Device> = {
     statusBarHeight: 24,
     navigationBarHeight: 48,
     safeAreaBottom: 0,
+    keyboardHeight: 300,
   },
 };
 

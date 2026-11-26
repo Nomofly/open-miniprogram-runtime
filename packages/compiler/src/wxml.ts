@@ -262,7 +262,12 @@ export function parseWxml(source: string, file = "<wxml>"): RawNode[] {
         if (end === -1) fail("unterminated <wxs>");
         el.children.push(source.slice(i, end));
         i = end + "</wxs>".length;
-      } else if (!selfClosing && !VOID_TAGS.has(tag)) {
+      } else if (
+        !selfClosing &&
+        (!VOID_TAGS.has(tag) ||
+          // An <input> holds its <keyboard-accessory> until </input>
+          (tag === "input" && /^\s*<keyboard-accessory[\s/>]/.test(source.slice(i))))
+      ) {
         stack.push(el);
       }
       continue;

@@ -167,6 +167,8 @@ export function startLogic(
     { webviewId: number; resolve: (results: unknown[]) => void; count: number }
   >();
   let builtinCallId = 0;
+  /** The simulated keyboard's height, for `wx.onKeyboardHeightChange`; 0 while it is down. */
+  let keyboardHeight = 0;
   /** Calls of built-in component methods waiting for their WebView's reply. */
   const builtinPending = new Map<
     number,
@@ -1611,6 +1613,18 @@ export function startLogic(
         }
         break;
       }
+      case "keyboard":
+        post({
+          type: "keyboard",
+          webviewId: record.webviewId,
+          height: message.height,
+          offset: message.offset,
+        });
+        if (message.height !== keyboardHeight) {
+          keyboardHeight = message.height;
+          wxApi!.app.emit("KeyboardHeightChange", { height: keyboardHeight });
+        }
+        break;
       case "videoFullScreen":
         post({
           type: "videoFullScreen",
