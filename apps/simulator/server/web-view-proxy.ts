@@ -50,7 +50,7 @@ const RESPONSE_DROPPED = new Set([
 ]);
 
 export function createWebViewProxies(bridge: () => Promise<string>): WebViewProxies {
-  const proxies = new Map<string, Promise<{ server: Server; port: number }>>();
+  const proxies = new Map<string, Promise<{ servers: Server[]; port: number }>>();
   let userAgent = "";
   /**
    * The origins that set each cookie name. Browsers keep cookies by host, not
@@ -62,21 +62,18 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
   const open = (origin: string, address: string) => {
     // An IPv4 client of a dual-stack server
     const host = address.replace(/^::ffff:(?=\d+\.)/, "");
-    const key = `${host} ${origin}`;
+    // `localhost` may resolve to either loopback address, so a loopback proxy listens on both
+    const hosts = isLoopbackAddress(host) ? LOOPBACK : [host];
+    const key = `${hosts.join(" ")} ${origin}`;
     let proxy = proxies.get(key);
     if (!proxy) {
-      const server = createServer((req, res) => {
+      const handle = (req: IncomingMessage, res: ServerResponse) => {
         forward(origin, req, res).catch((error: unknown) => {
           if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
           res.end((error as Error).message);
         });
-      });
-      proxy = new Promise((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, host, () =>
-          resolve({ server, port: (server.address() as AddressInfo).port }),
-        );
-      });
+      };
+      proxy = listenAll(hosts, handle);
       proxies.set(key, proxy);
       proxy.catch(() => proxies.delete(key));
     }
@@ -181,10 +178,53 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       return open(origin, address);
     },
     close() {
-      for (const proxy of proxies.values()) void proxy.then(({ server }) => server.close());
+      for (const proxy of proxies.values()) {
+        void proxy.then(({ servers }) => servers.forEach((server) => server.close()));
+      }
       proxies.clear();
     },
   };
+}
+
+const LOOPBACK = ["127.0.0.1", "::1"];
+const isLoopbackAddress = (address: string) =>
+  address === "::1" || address === "localhost" || /^127\.\d+\.\d+\.\d+$/.test(address);
+
+/** Listens on a port of the system's choosing, which the hosts after the first share. */
+const listen = (server: Server, port: number, host: string) =>
+  new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => resolve((server.address() as AddressInfo).port));
+  });
+
+/**
+ * One port on every host. A host the machine does not have, such as `::1`
+ * without IPv6, is skipped; when another program has the port there, the
+ * proxy tries another port.
+ */
+async function listenAll(
+  hosts: string[],
+  handle: (req: IncomingMessage, res: ServerResponse) => void,
+): Promise<{ servers: Server[]; port: number }> {
+  for (let attempt = 0; ; attempt++) {
+    const servers = [createServer(handle)];
+    const port = await listen(servers[0]!, 0, hosts[0]!);
+    try {
+      for (const host of hosts.slice(1)) {
+        const server = createServer(handle);
+        try {
+          await listen(server, port, host);
+          servers.push(server);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EADDRNOTAVAIL") throw error;
+        }
+      }
+      return { servers, port };
+    } catch (error) {
+      servers.forEach((server) => server.close());
+      if (attempt >= 4) throw error;
+    }
+  }
 }
 
 /** WeChat's `binderror` detail: the URL without its query, and the whole URL. */

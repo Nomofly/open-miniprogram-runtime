@@ -45,6 +45,10 @@ test("each origin's server gets back only the cookies it set, and its proxy list
   expect(a.seen.at(-1)!.cookie).toBe("a=1; script=1");
   expect(b.seen.at(-1)!.cookie).toBe("b=1; script=1");
 
+  // Reachable at either loopback address, whichever one localhost resolves to
+  expect(await (await fetch(`http://[::1]:${portA}/`)).text()).toBe("ok");
+  expect(await (await fetch(`http://localhost:${portA}/`)).text()).toBe("ok");
+
   // Not reachable from other interfaces
   const { networkInterfaces } = await import("node:os");
   const other = Object.values(networkInterfaces())
