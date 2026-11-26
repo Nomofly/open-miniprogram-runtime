@@ -20,7 +20,7 @@ import {
   WxRootPortal,
 } from "./components/containers.ts";
 import { SKYLINE_ONLY_TAGS, SkylineOnly, WxGridView } from "./components/skyline.ts";
-import { WxEditor } from "./components/editor.ts";
+import { WxEditor, WxEditorPortal } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
 import { WxLivePlayer, WxLivePusher, WxVoipRoom } from "./components/live.ts";
 import { WxMap } from "./components/map.ts";
@@ -676,6 +676,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-picker-view-column", WxPickerViewColumn],
   ["wx-rich-text", WxRichText],
   ["wx-editor", WxEditor],
+  ["wx-editor-portal", WxEditorPortal],
   ["wx-web-view", WxWebView],
   ["wx-grid-view", WxGridView],
   ...SKYLINE_ONLY_TAGS.map((tag): [string, CustomElementConstructor] => [
@@ -731,7 +732,7 @@ wx-view, wx-cover-view, wx-form, wx-navigator, wx-picker, wx-movable-area, wx-pi
 wx-list-view, wx-sticky-header, wx-sticky-section, wx-draggable-sheet, wx-nested-scroll-header, wx-nested-scroll-body, wx-list-builder, wx-grid-builder, wx-open-container, wx-snapshot, wx-large-image, wx-open-data-item, wx-open-data-list { display: block; }
 wx-sticky-header { position: sticky; top: 0; z-index: 1; }
 :is(wx-tap-gesture-handler, wx-double-tap-gesture-handler, wx-pan-gesture-handler, wx-scale-gesture-handler, wx-long-press-gesture-handler, wx-force-press-gesture-handler, wx-horizontal-drag-gesture-handler, wx-vertical-drag-gesture-handler) { display: contents; }
-wx-page-meta, wx-editor-portal { display: none; }
+wx-page-meta { display: none; }
 /* Shown only on the simulated keyboard of its focused field; the page's styles may lay it out, up to 200px tall */
 wx-keyboard-accessory:not(.omr-keyboard-accessory-shown) { display: none !important; }
 :where(wx-keyboard-accessory) { display: block; }

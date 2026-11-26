@@ -102,7 +102,7 @@ const LIVE_PUSHER_METHODS = [
   "clearMakeups",
 ];
 
-/** EditorContext methods up to base library 3.5.0; `<editor>` runs them. */
+/** EditorContext methods up to base library 3.5.0, and `insertCustomBlock` (3.7.11); `<editor>` runs them. */
 const EDITOR_METHODS = [
   "format",
   "removeFormat",
@@ -117,6 +117,7 @@ const EDITOR_METHODS = [
   "redo",
   "blur",
   "scrollIntoView",
+  "insertCustomBlock",
 ];
 
 /** MapContext methods up to base library 3.5.0; the simulated `<map>` runs them. */

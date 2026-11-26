@@ -2,8 +2,9 @@
  * The content model of `<editor>`, independent of the DOM so it can be tested:
  * the content is a flat list of items, each one position long, as Quill
  * counts them. A text line is its characters and images followed by a line
- * end that carries the line's formats; a divider is a line of its own. The
- * last item is always a line end.
+ * end that carries the line's formats; a divider is a line of its own, and
+ * so is a custom block, a divider with the `blockId` an `<editor-portal>`
+ * fills. The last item is always a line end.
  *
  * The editor reads its DOM into items, edits the items and renders them back,
  * and exports them as WeChat does: `html` with `<p>` blocks, `text` and a
@@ -18,7 +19,7 @@ export type Item =
   | { kind: "char"; char: string; formats: Formats }
   | { kind: "image"; src: string; props: Record<string, string>; formats: Formats }
   | { kind: "line"; formats: Formats }
-  | { kind: "divider" };
+  | { kind: "divider"; blockId?: string };
 
 export interface DeltaOp {
   insert: string | Record<string, unknown>;
@@ -281,7 +282,9 @@ const escapeText = (text: string) =>
 const escapeAttribute = (text: string) => escapeText(text).replace(/"/g, "&quot;");
 
 type Leaf = Extract<Item, { kind: "char" | "image" }>;
-type Block = { kind: "line"; leaves: Leaf[]; formats: Formats } | { kind: "divider" };
+type Block =
+  | { kind: "line"; leaves: Leaf[]; formats: Formats }
+  | Extract<Item, { kind: "divider" }>;
 
 /** The items as lines. */
 function blocksOf(items: Item[]): Block[] {
@@ -295,7 +298,7 @@ function blocksOf(items: Item[]): Block[] {
     } else {
       if (leaves.length > 0) blocks.push({ kind: "line", leaves, formats: {} });
       leaves = [];
-      blocks.push({ kind: "divider" });
+      blocks.push(item);
     }
   }
   if (leaves.length > 0) blocks.push({ kind: "line", leaves, formats: {} });
@@ -365,7 +368,10 @@ export function toHtml(items: Item[], { imageUrl }: HtmlOptions = {}): string {
   for (const block of blocksOf(items)) {
     if (block.kind === "divider") {
       closeList();
-      html += "<hr>";
+      html +=
+        block.blockId === undefined
+          ? "<hr>"
+          : `<div data-block-id="${escapeAttribute(block.blockId)}" contenteditable="false"></div>`;
       continue;
     }
     const inner =
@@ -413,7 +419,11 @@ export const toText = (items: Item[]) =>
 const withAttributes = (op: DeltaOp, attributes: Record<string, unknown>) =>
   Object.keys(attributes).length > 0 ? { ...op, attributes } : op;
 
-/** A Quill-like delta: text with its formats, `\n` with the line's formats, image and divider embeds. */
+/**
+ * A Quill-like delta: text with its formats, `\n` with the line's formats,
+ * image and divider embeds, and custom blocks as `{ customBlock: { blockId } }`,
+ * since WeChat documents only that the delta keeps the block id.
+ */
 export function toDelta(items: Item[]): { ops: DeltaOp[] } {
   const ops: DeltaOp[] = [];
   const push = (op: DeltaOp) => {
@@ -432,7 +442,9 @@ export function toDelta(items: Item[]): { ops: DeltaOp[] } {
     else if (item.kind === "line") push(withAttributes({ insert: "\n" }, item.formats));
     else if (item.kind === "image") {
       push(withAttributes({ insert: { image: item.src } }, { ...item.props, ...item.formats }));
-    } else push({ insert: { divider: true } });
+    } else if (item.blockId !== undefined)
+      push({ insert: { customBlock: { blockId: item.blockId } } });
+    else push({ insert: { divider: true } });
   }
   return { ops };
 }
@@ -480,6 +492,10 @@ export function fromDelta(delta: unknown): Item[] {
           formats: pick(attributes, INLINE),
         });
       } else if (op.insert.divider) items.push({ kind: "divider" });
+      else if (typeof op.insert.customBlock === "object" && op.insert.customBlock !== null) {
+        const { blockId } = op.insert.customBlock as { blockId?: unknown };
+        items.push({ kind: "divider", blockId: stringOf(blockId) });
+      }
     }
   }
   if (items.at(-1)?.kind !== "line") items.push({ kind: "line", formats: {} });
@@ -677,9 +693,10 @@ export function readHtml(
         brokeAtBr = true;
         return;
       }
-      if (tag === "HR") {
+      const blockId = attribute(child, "data-block-id");
+      if (tag === "HR" || blockId !== null) {
         if (open) endLine(block);
-        items.push({ kind: "divider" });
+        items.push(blockId === null ? { kind: "divider" } : { kind: "divider", blockId });
         brokeAtBr = false;
         return;
       }
@@ -776,7 +793,7 @@ export function locate(root: MiniNode, index: number): DomPoint {
     return result;
   };
   for (const block of Array.from(root.childNodes)) {
-    if (block.nodeName === "HR") {
+    if (block.nodeName === "HR" || attribute(block, "data-block-id") !== null) {
       remaining -= 1;
       continue;
     }

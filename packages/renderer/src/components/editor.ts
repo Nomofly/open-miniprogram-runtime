@@ -5,6 +5,7 @@
 import { fsFileUrl, isFsPath } from "@omr/runtime";
 import { toText as stringOf } from "../expression.ts";
 import { Builtin, emit } from "./base.ts";
+import { warnNewer } from "./store-cards.ts";
 import {
   applyFormat,
   clampRange,
@@ -113,7 +114,9 @@ export class WxEditor extends Builtin {
       if (text) this.insertText(text);
     });
     document.addEventListener("selectionchange", () => this.selectionChanged());
+    this.addEventListener("omr-editor-portal", () => this.placePortals());
     this.update();
+    this.placePortals();
     setTimeout(() => emit(this, "ready"), 0);
   }
 
@@ -146,6 +149,28 @@ export class WxEditor extends Builtin {
       case "insertImage":
         this.insertImage(options);
         return {};
+      case "insertCustomBlock": {
+        // An empty block of its own line, which an <editor-portal> with this key fills
+        const blockId = `block-${(blockCount++).toString(36)}-${Date.now().toString(36)}`;
+        this.edit((items, range) => {
+          const removed = replaceRange(items, range.index, range.length, []);
+          const before = removed[range.index - 1];
+          const inserted: Item[] =
+            before && before.kind !== "line" && before.kind !== "divider"
+              ? [
+                  { kind: "line", formats: {} },
+                  { kind: "divider", blockId },
+                ]
+              : [{ kind: "divider", blockId }];
+          // Unless nowrap, the cursor goes on to an empty line after the block
+          const wrap = !options.nowrap && removed[range.index]?.kind !== "line";
+          if (wrap) inserted.push({ kind: "line", formats: {} });
+          const next = replaceRange(removed, range.index, 0, inserted);
+          const index = range.index + inserted.length - (wrap ? 1 : 0);
+          return { items: next, range: { index, length: 0 } };
+        });
+        return { blockId };
+      }
       case "insertDivider":
         this.edit((items, range) => {
           const removed = replaceRange(items, range.index, range.length, []);
@@ -309,6 +334,7 @@ export class WxEditor extends Builtin {
   private render(items: Item[], range: Range, focus: boolean): void {
     this.hideImageTools();
     this.area!.innerHTML = toHtml(items, { imageUrl: (src) => this.omrResolveAsset(src) });
+    this.placePortals();
     this.syncEmpty();
     this.select(clampRange(items, range.index, range.length), focus);
   }
@@ -529,11 +555,44 @@ export class WxEditor extends Builtin {
     }));
   }
 
+  /**
+   * Shows each `<editor-portal>` over the custom block of its key, which
+   * takes the portal's height; a portal without its block shows nothing.
+   */
+  private placePortals(): void {
+    const area = this.area;
+    if (!area) return;
+    const blocks = new Map(
+      [...area.querySelectorAll<HTMLElement>("[data-block-id]")].map((el) => [
+        el.dataset.blockId!,
+        el,
+      ]),
+    );
+    let index = 0;
+    for (const portal of this.querySelectorAll<WxEditorPortal>("wx-editor-portal")) {
+      if (portal.closest("wx-editor") !== this) continue;
+      const block = blocks.get(portal.blockKey);
+      if (!block) {
+        portal.omrAnchor(undefined);
+        continue;
+      }
+      blocks.delete(portal.blockKey);
+      const name = `--omr-block-${this.editorId}-${index++}`;
+      block.style.setProperty("anchor-name", name);
+      portal.omrAnchor(name);
+      block.style.height = `${portal.offsetHeight}px`;
+      this.portalSizes.observe(portal);
+    }
+  }
+  private readonly editorId = (editorCount++).toString(36);
+  /** A portal's content changed size: its block follows. */
+  private readonly portalSizes = new ResizeObserver(() => this.placePortals());
+
   private syncEmpty(): void {
     const area = this.area!;
     area.classList.toggle(
       "ql-blank",
-      (area.textContent ?? "") === "" && !area.querySelector("img, hr"),
+      (area.textContent ?? "") === "" && !area.querySelector("img, hr, [data-block-id]"),
     );
   }
 
@@ -541,6 +600,49 @@ export class WxEditor extends Builtin {
   private contents(): Record<string, unknown> {
     const { items } = this.read();
     return { html: toHtml(items), text: toText(items), delta: toDelta(items) };
+  }
+}
+
+let editorCount = 0;
+let blockCount = 0;
+
+/**
+ * `<editor-portal>` (3.7.11): the content of the `<editor>` custom block whose
+ * blockId is its `key`. It stays where the template puts it and is shown over
+ * the block, anchored to it, so the editor's text never contains it.
+ */
+export class WxEditorPortal extends Builtin {
+  private readonly placement: HTMLStyleElement;
+  constructor() {
+    super();
+    this.placement = this.shadow("<style></style><slot></slot>").querySelector("style")!;
+    this.omrAnchor(undefined);
+  }
+  get blockKey(): string {
+    return this.str("key");
+  }
+  connectedCallback(): void {
+    warnNewer("editor-portal", "3.7.11");
+    this.changed();
+  }
+  protected override update(): void {
+    this.changed();
+  }
+  /** Tells the editor around it to place it again. */
+  private changed(): void {
+    this.dispatchEvent(new CustomEvent("omr-editor-portal", { bubbles: true }));
+  }
+  /**
+   * Shows the portal over the block that has this anchor name, or hides it
+   * without one. The name is set inline: anchor names are scoped to the tree
+   * that declares them, and the block's is in the document.
+   */
+  omrAnchor(name: string | undefined): void {
+    this.placement.textContent = name
+      ? ":host { display: block; position: absolute; top: anchor(top); left: anchor(left); width: anchor-size(width); position-visibility: anchors-visible; }"
+      : ":host { display: none; }";
+    if (name) this.style.setProperty("position-anchor", name);
+    else this.style.removeProperty("position-anchor");
   }
 }
 

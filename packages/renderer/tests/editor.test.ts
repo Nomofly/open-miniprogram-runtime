@@ -113,6 +113,30 @@ describe("editor content", () => {
     expect(readHtml(root).items).toEqual(items);
   });
 
+  test("a custom block is a line of its own that keeps its id through html and delta", () => {
+    const delta = {
+      ops: [
+        { insert: "a\n" },
+        { insert: { customBlock: { blockId: "x1" } } },
+        { insert: { divider: true } },
+        { insert: "b\n" },
+      ],
+    };
+    const items = fromDelta(delta);
+    expect(toDelta(items)).toEqual(delta);
+    expect(toText(items)).toBe("a\nb\n");
+    expect(toHtml(items)).toBe(
+      '<p>a</p><div data-block-id="x1" contenteditable="false"></div><hr><p>b</p>',
+    );
+    const block = el("div", [], { "data-block-id": "x1", contenteditable: "false" });
+    const b = txt("b");
+    const root = el("div", [el("p", [txt("a")]), block, el("hr"), el("p", [b])]);
+    const { items: read, positions } = readHtml(root, [{ node: b, offset: 1 }]);
+    expect(read).toEqual(items);
+    // a, its line end, the block and the divider come before b
+    expect(positions).toEqual([5]);
+  });
+
   test("reports where selection points are", () => {
     const first = txt("ab");
     const second = txt("cd");
