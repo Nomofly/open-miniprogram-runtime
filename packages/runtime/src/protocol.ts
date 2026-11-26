@@ -306,6 +306,13 @@ export interface BuiltinTarget {
   id?: string;
   /** The page (0) or component whose template has the component. */
   scopeNodeId: number;
+  /** Set for a node a selector query found: that very element, whatever its id. */
+  nodeKey?: number;
+}
+
+/** What `NodesRef.node` gives for a `<scroll-view>`: the target of its ScrollViewContext and its current settings. */
+export interface ScrollViewNode {
+  scrollView: BuiltinTarget & { settings: Record<string, boolean> };
 }
 
 /** One `wx.createSelectorQuery()` selection and the fields to read from it. */

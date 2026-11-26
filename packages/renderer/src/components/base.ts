@@ -22,6 +22,10 @@ export interface BuiltinElement extends HTMLElement {
   ): Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
   /** Resolves a package path the component reads from an object attribute, such as a marker's `iconPath`; the view sets it. */
   omrResolveAsset?: (src: string) => string;
+  /** The elements a selector matches in the template that has the component, as a context's selector argument names them; the view sets it. */
+  omrSelect?: (selector: string) => Element[];
+  /** A `<scroll-view>`'s ScrollViewContext settings, which `NodesRef.node` reports. */
+  omrSettings?(): Record<string, boolean>;
   /** The detail of the `tap` the view raises for a click on the component, such as the coordinates on a `<map>`. */
   omrTapDetail?(event: MouseEvent): Record<string, unknown>;
 }

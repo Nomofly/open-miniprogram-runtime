@@ -459,3 +459,55 @@ describe("NodesRef.context", () => {
     expect(log().at(-1)).toEqual({ errMsg: "play:ok" });
   });
 });
+
+describe("ScrollViewContext", () => {
+  test("NodesRef.node of an enhanced <scroll-view> calls that very node back; setting a property applies it", async () => {
+    const { view, log, tap, toView } = boot({
+      [PAGE]: {
+        query: `wx.createSelectorQuery().select("#list").node((res) => {
+          this.list = res.node;
+          push({ paging: res.node.pagingEnabled, scrollEnabled: res.node.scrollEnabled });
+        }).exec();`,
+        use: `this.list.scrollEnabled = false;
+          push(this.list.scrollEnabled);
+          push(this.list.scrollTo({ top: 120, animated: true }));
+          this.list.scrollIntoView("#item3");
+          this.list.triggerRefresh();`,
+      },
+    });
+    await settle();
+    tap("query");
+    await settle();
+    const query = toView("query").at(-1)!;
+    expect(query.requests[0]!.fields).toEqual({ node: true });
+    const scrollView = { tag: "scroll-view", id: "list", scopeNodeId: 0, nodeKey: 7 };
+    const settings = {
+      scrollEnabled: true,
+      bounces: true,
+      showScrollbar: true,
+      pagingEnabled: true,
+      fastDeceleration: false,
+      decelerationDisabled: false,
+    };
+    view(1, {
+      type: "queryResult",
+      queryId: query.queryId,
+      results: [{ node: { scrollView: { ...scrollView, settings } } }],
+    });
+    await settle();
+    expect(log()).toEqual([{ paging: true, scrollEnabled: true }]);
+
+    tap("use");
+    await settle();
+    // Methods return nothing; each reaches the node the query found, by its key
+    expect(log().slice(1)).toEqual([false, undefined]);
+    expect(
+      toView("callBuiltin").map(({ target, method, args }) => ({ target, method, args })),
+    ).toEqual([
+      { target: scrollView, method: "set", args: [{ scrollEnabled: false }] },
+      { target: scrollView, method: "scrollTo", args: [{ top: 120, animated: true }] },
+      { target: scrollView, method: "scrollIntoView", args: ["#item3", {}] },
+      { target: scrollView, method: "triggerRefresh", args: [{}] },
+    ]);
+  });
+});

@@ -12,7 +12,7 @@
  * playable frames, as `wx.chooseVideo` returns.
  */
 import { asyncApi, safeCall, type AnyFunction, type Options } from "./common.ts";
-import type { ContextNode } from "../protocol.ts";
+import type { ContextNode, ScrollViewNode } from "../protocol.ts";
 import type { ApiContext } from "./context.ts";
 import { encodePhoto } from "./media.ts";
 
@@ -400,7 +400,43 @@ export function createContextApis(ctx: ApiContext) {
     }
   };
 
+  /**
+   * `NodesRef.node` of an enhanced `<scroll-view>`: a ScrollViewContext. Its
+   * properties apply to the scroll view when set; its methods return nothing
+   * and take no callbacks, as WeChat documents them.
+   */
+  const scrollViewContext = (webviewId: number, { scrollView }: ScrollViewNode) => {
+    const { settings, ...target } = scrollView;
+    const call = (method: string, args: unknown[]) => {
+      host.callBuiltin(webviewId, target, method, args.map(plain)).catch((error: unknown) => {
+        console.warn(`[omr] ScrollViewContext.${method}: ${(error as Error).message}`);
+      });
+    };
+    const values = { ...settings };
+    const context: Record<string, unknown> = {
+      scrollTo: (options: Options = {}) => call("scrollTo", [options]),
+      scrollIntoView: (selector: string, options?: Options) =>
+        call("scrollIntoView", [String(selector), options ?? {}]),
+      triggerRefresh: (options: Options = {}) => call("triggerRefresh", [options]),
+      closeRefresh: () => call("closeRefresh", []),
+      triggerTwoLevel: (options: Options = {}) => call("triggerTwoLevel", [options]),
+      closeTwoLevel: (options: Options = {}) => call("closeTwoLevel", [options]),
+    };
+    for (const name of Object.keys(values)) {
+      Object.defineProperty(context, name, {
+        enumerable: true,
+        get: () => values[name],
+        set: (value: unknown) => {
+          values[name] = Boolean(value);
+          call("set", [{ [name]: values[name] }]);
+        },
+      });
+    }
+    return context;
+  };
+
   return {
+    scrollViewContext,
     apis: {
       createVideoContext,
       createMapContext: (mapId: string, component?: object) =>

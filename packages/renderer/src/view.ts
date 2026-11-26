@@ -1118,10 +1118,22 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     }
     if (fields.node) {
       const canvasNodeId = (el as Partial<CanvasElement> | null)?.canvasNodeId;
+      const settings = (el as Partial<BuiltinElement> | null)?.omrSettings?.();
       result.node =
-        canvasNodeId === undefined
-          ? null
-          : { canvasNodeId, width: el!.clientWidth, height: el!.clientHeight };
+        canvasNodeId !== undefined
+          ? { canvasNodeId, width: el!.clientWidth, height: el!.clientHeight }
+          : el && settings
+            ? {
+                // A ScrollViewContext: the logic layer calls this very element back
+                scrollView: {
+                  tag: el.localName.slice(3),
+                  id: el.id,
+                  scopeNodeId: states.get(el)!.ownerId,
+                  nodeKey: keyOf(el),
+                  settings,
+                },
+              }
+            : null;
     }
     if (fields.context) {
       // What the node is, so the logic layer builds its context, such as an EditorContext
@@ -1148,6 +1160,19 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       }
     }
     return result;
+  };
+
+  /** Keys of elements a selector query handed to the logic layer, which calls them back by key. */
+  const nodeKeys = new WeakMap<Element, number>();
+  const keyedNodes = new Map<number, WeakRef<Element>>();
+  const keyOf = (el: Element) => {
+    let key = nodeKeys.get(el);
+    if (key === undefined) {
+      key = keyedNodes.size + 1;
+      nodeKeys.set(el, key);
+      keyedNodes.set(key, new WeakRef(el));
+    }
+    return key;
   };
 
   /** The rendered elements a selector matches in a scope's template, in document order. */
@@ -1316,20 +1341,31 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         const { callId, target } = message;
         void Promise.resolve()
           .then(() => {
-            const el = [
-              ...(scopes.get(target.scopeNodeId)?.root.getElementsByTagName(`wx-${target.tag}`) ??
-                []),
-            ].find(
-              (el) =>
-                target.id === undefined ||
-                (el.id === target.id && states.get(el)?.ownerId === target.scopeNodeId),
+            const keyed =
+              target.nodeKey === undefined ? undefined : keyedNodes.get(target.nodeKey)?.deref();
+            const el = (
+              target.nodeKey !== undefined
+                ? keyed?.isConnected
+                  ? keyed
+                  : undefined
+                : [
+                    ...(scopes
+                      .get(target.scopeNodeId)
+                      ?.root.getElementsByTagName(`wx-${target.tag}`) ?? []),
+                  ].find(
+                    (el) =>
+                      target.id === undefined ||
+                      (el.id === target.id && states.get(el)?.ownerId === target.scopeNodeId),
+                  )
             ) as Partial<BuiltinElement> | undefined;
             if (!el?.omrCall) throw new Error(`no <${target.tag}> found`);
-            // Sources a context passes, such as EditorContext.insertImage's, resolve like the template's
+            // Sources a context passes, such as EditorContext.insertImage's, resolve like the template's,
+            // and its selectors, such as ScrollViewContext.scrollIntoView's, match in that template
             const scope = scopes.get(target.scopeNodeId);
             if ("omrResolveAsset" in el && scope) {
               el.omrResolveAsset = (src: string) => env.resolveAsset(src, scope.def.template);
             }
+            if (scope) el.omrSelect = (selector: string) => selectIn(scope, selector);
             return el.omrCall(message.method, message.args);
           })
           .then(

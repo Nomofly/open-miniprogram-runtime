@@ -15,6 +15,13 @@ export class WxScrollView extends Builtin {
   /** When the user triggered a refresh. */
   private refreshedAt = 0;
   private enhancedDrag?: { x: number; y: number; t: number };
+  /**
+   * What a ScrollViewContext set, over the attributes of the same name; a
+   * later change of the attribute wins again.
+   */
+  private overrides: Record<string, boolean> = {};
+  /** Set by the view before a context call. */
+  omrSelect?: (selector: string) => Element[];
 
   constructor() {
     super();
@@ -85,6 +92,82 @@ export class WxScrollView extends Builtin {
     this.addEventListener("pointercancel", dragEnd);
   }
 
+  /** A ScrollViewContext setting: what the context set, else the attribute. */
+  private setting(name: string, attribute: string, fallback: boolean): boolean {
+    if (name in this.overrides) return this.overrides[name]!;
+    const value = this.props[attribute];
+    return value === undefined ? fallback : this.flag(attribute);
+  }
+
+  /** The settings `NodesRef.node` reports; WeChat gives a context only with `enhanced`. */
+  omrSettings(): Record<string, boolean> | undefined {
+    if (!this.flag("enhanced")) return undefined;
+    return {
+      scrollEnabled: this.setting("scrollEnabled", "", true),
+      bounces: this.setting("bounces", "bounces", true),
+      showScrollbar: this.setting("showScrollbar", "show-scrollbar", true),
+      pagingEnabled: this.setting("pagingEnabled", "paging-enabled", false),
+      fastDeceleration: this.setting("fastDeceleration", "fast-deceleration", false),
+      decelerationDisabled: false,
+    };
+  }
+
+  /** ScrollViewContext methods, and `set` for its properties. */
+  omrCall(method: string, args: unknown[]): void {
+    const options = (args[0] ?? {}) as Record<string, unknown>;
+    switch (method) {
+      case "set":
+        this.overrides = { ...this.overrides, ...(options as Record<string, boolean>) };
+        this.applySettings();
+        return;
+      case "scrollTo": {
+        const to: ScrollToOptions = { behavior: options.animated ? "smooth" : "auto" };
+        if (typeof options.top === "number") to.top = options.top;
+        if (typeof options.left === "number") to.left = options.left;
+        this.scrollTo(to);
+        return;
+      }
+      case "scrollIntoView": {
+        const selector = typeof args[0] === "string" ? args[0] : "";
+        const target = (this.omrSelect?.(selector) ?? []).find((el) => this.contains(el));
+        if (!target) throw new Error(`${selector} not found in the scroll-view`);
+        this.scrollToElement(target, 0, "auto");
+        return;
+      }
+      case "triggerRefresh":
+        if (!this.flag("refresher-enabled") || this.state === "refreshing") return;
+        this.state = "refreshing";
+        this.refreshedAt = performance.now();
+        this.glide(this.threshold(), undefined, Number(options.duration ?? 300) || 300);
+        emit(this, "refresherrefresh");
+        return;
+      case "closeRefresh":
+        if (this.state === "refreshing") this.close("refresherrestore");
+        return;
+      // The two-level refresher is Skyline only
+      case "triggerTwoLevel":
+      case "closeTwoLevel":
+        return;
+      default:
+        throw new Error(`${method} is not supported`);
+    }
+  }
+
+  private applySettings(): void {
+    // Only what a context changed goes inline; the rest stays with the page's styles
+    const locked = this.overrides.scrollEnabled === false;
+    this.style.setProperty("overflow", locked ? "hidden" : "", locked ? "important" : "");
+    this.style.setProperty(
+      "overscroll-behavior",
+      this.flag("enhanced") && !this.setting("bounces", "bounces", true) ? "none" : "",
+    );
+    const scrollbar = this.overrides.showScrollbar;
+    this.style.setProperty(
+      "scrollbar-width",
+      scrollbar === undefined ? "" : scrollbar ? "thin" : "none",
+    );
+  }
+
   private position() {
     return { scrollTop: this.scrollTop, scrollLeft: this.scrollLeft };
   }
@@ -94,10 +177,16 @@ export class WxScrollView extends Builtin {
 
   protected override update(): void {
     this.style.setProperty("overflow-anchor", this.flag("scroll-anchoring") ? "auto" : "none");
-    this.style.setProperty(
-      "overscroll-behavior",
-      this.flag("enhanced") && this.props.bounces === false ? "none" : "",
-    );
+    // An attribute the logic layer changes wins over what a context set before
+    for (const [name, attribute] of [
+      ["bounces", "bounces"],
+      ["showScrollbar", "show-scrollbar"],
+      ["pagingEnabled", "paging-enabled"],
+      ["fastDeceleration", "fast-deceleration"],
+    ] as const) {
+      if (this.applied.changed(attribute, this.props[attribute])) delete this.overrides[name];
+    }
+    this.applySettings();
     this.refresher.style.background = this.str("refresher-background");
     const style = this.str("refresher-default-style", "black");
     this.dots.hidden = style === "none";
@@ -141,10 +230,10 @@ export class WxScrollView extends Builtin {
     });
   }
 
-  private glide(to: number, done?: () => void): void {
+  private glide(to: number, done?: () => void, duration = 250): void {
     this.stopAnimation();
     const from = this.pull;
-    this.stopAnimation = animate(from === to ? 0 : 250, (t) => {
+    this.stopAnimation = animate(from === to ? 0 : duration, (t) => {
       this.setPull(from + (to - from) * t);
       if (t >= 1) done?.();
     });
@@ -167,16 +256,7 @@ export class WxScrollView extends Builtin {
     if (this.applied.changed("scroll-into-view", intoView) && intoView) {
       const target = this.querySelector(`#${CSS.escape(intoView)}`);
       if (target) {
-        const offset = target.getBoundingClientRect();
-        const box = this.getBoundingClientRect();
-        const extra = lengthOf(this.props["scroll-into-view-offset"]);
-        this.scrollTo({
-          top: this.flag("scroll-y") ? this.scrollTop + offset.top - box.top + extra : undefined,
-          left: this.flag("scroll-x")
-            ? this.scrollLeft + offset.left - box.left + extra
-            : undefined,
-          behavior,
-        });
+        this.scrollToElement(target, lengthOf(this.props["scroll-into-view-offset"]), behavior);
         return;
       }
     }
@@ -191,9 +271,19 @@ export class WxScrollView extends Builtin {
     }
   }
 
+  private scrollToElement(target: Element, extra: number, behavior: ScrollBehavior): void {
+    const offset = target.getBoundingClientRect();
+    const box = this.getBoundingClientRect();
+    this.scrollTo({
+      top: this.flag("scroll-y") ? this.scrollTop + offset.top - box.top + extra : undefined,
+      left: this.flag("scroll-x") ? this.scrollLeft + offset.left - box.left + extra : undefined,
+      behavior,
+    });
+  }
+
   /** `paging-enabled` stops at whole pages of the scroll view's size. */
   private snapToPage(): void {
-    if (!this.flag("enhanced") || !this.flag("paging-enabled")) return;
+    if (!this.flag("enhanced") || !this.setting("pagingEnabled", "paging-enabled", false)) return;
     const vertical = this.flag("scroll-y");
     const page = vertical ? this.clientHeight : this.clientWidth;
     if (page <= 0) return;

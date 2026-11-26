@@ -23,7 +23,13 @@ import { createNetworkApis } from "./api/network.ts";
 import { createAppApis } from "./api/app.ts";
 import { createObserverApis } from "./api/observers.ts";
 import { createWebViewApis } from "./api/web-view.ts";
-import type { ContextNode, PermissionKind, SelectorQueryRequest, SystemInfo } from "./protocol.ts";
+import type {
+  ContextNode,
+  PermissionKind,
+  ScrollViewNode,
+  SelectorQueryRequest,
+  SystemInfo,
+} from "./protocol.ts";
 
 /** Descriptions WeChat shows in `wx.authorize` dialogs, by scope. */
 export const SCOPE_DESCRIPTIONS: Record<string, string> = {
@@ -650,10 +656,16 @@ export function createWx(host: WxHost) {
         // A canvas node is a Canvas object of the logic layer
         // and a context is built from what the view says the node is
         const withNode = (result: unknown) => {
-          const node = (result as { node?: { canvasNodeId: number } } | null)?.node;
-          const resolved = node
-            ? { ...result!, node: canvasApis.nodeOf(webviewId, node as never) }
-            : result;
+          const node = (result as { node?: Record<string, unknown> } | null)?.node;
+          const resolved = !node
+            ? result
+            : {
+                ...result!,
+                node:
+                  "scrollView" in node
+                    ? contextApis.scrollViewContext(webviewId, node as unknown as ScrollViewNode)
+                    : canvasApis.nodeOf(webviewId, node as never),
+              };
           if (!resolved || typeof resolved !== "object" || !("context" in resolved))
             return resolved;
           const context = contextApis.contextOf(
