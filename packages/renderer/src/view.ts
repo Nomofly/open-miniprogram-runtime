@@ -1032,6 +1032,15 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     post({ type: "camera", cameraId: camera.cameraId, mounted, mode, frameSize });
   });
 
+  // <official-account> asks the logic layer whether the launch scene lets it show
+  const officialAccounts = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-official-account", (event) => {
+    const { account } = (event as CustomEvent<{ account: BuiltinElement & { accountId: number } }>)
+      .detail;
+    officialAccounts.set(account.accountId, account);
+    post({ type: "officialAccount", accountId: account.accountId });
+  });
+
   // Pull-down refresh: the page slides down over the window background, which shows three dots
   const pullDown = createPullDown(bundle.window, () => post({ type: "pullDownRefresh" }));
 
@@ -1334,6 +1343,10 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         return;
       case "fillNickname":
         nicknameInput?.omrFill?.(message.value);
+        return;
+      case "officialAccountState":
+        officialAccounts.get(message.accountId)?.omrAccountState?.(message);
+        officialAccounts.delete(message.accountId);
         return;
       case "cameraState":
         cameras.get(message.cameraId)?.omrCameraState?.(message);

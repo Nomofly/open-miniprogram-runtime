@@ -25,6 +25,7 @@ function boot(
   config: SimulatorConfig = {},
   windows: Record<string, Record<string, unknown>> = {},
   launch?: { path: string; query: Record<string, string> },
+  scene?: number,
 ) {
   const sent: LogicToShell[] = [];
   const handle = startLogic((message) => sent.push(message));
@@ -50,6 +51,7 @@ function boot(
     chrome: { navigationBar: 64, tabBar: 50 },
     appService,
     launch,
+    scene,
   });
   const view = (webviewId: number, message: ViewToLogic) =>
     handle({ type: "view", webviewId, message });
@@ -1360,5 +1362,31 @@ describe("logic layer", () => {
     view(1, { type: "navigateMiniProgram", openType: "exit", props: {}, target, handlers });
     for (let i = 0; i < 4; i++) await settle();
     expect(sent.filter((message) => message.type === "exit")).toHaveLength(1);
+  });
+
+  test("official-account shows only after a launch from a scanned code", async () => {
+    const files = { "app.js": APP, "pages/index/index.js": "Page({});" };
+    const state = (config: SimulatorConfig, scene?: number) => {
+      const { sent, view } = boot(
+        files,
+        { pages: ["pages/index/index"] },
+        config,
+        {},
+        undefined,
+        scene,
+      );
+      view(1, { type: "ready" });
+      view(1, { type: "officialAccount", accountId: 1 });
+      return toView(sent, "officialAccountState")[0];
+    };
+    expect(state({})).toMatchObject({ status: 5, errMsg: "场景值错误" });
+    expect(state({ officialAccount: { name: "Demo News" } }, 1047)).toEqual({
+      type: "officialAccountState",
+      accountId: 1,
+      status: 0,
+      errMsg: "ok",
+      name: "Demo News",
+    });
+    expect(state({ officialAccount: { status: 4 } }, 1011)).toMatchObject({ status: 4 });
   });
 });

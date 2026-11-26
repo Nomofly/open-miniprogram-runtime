@@ -14,6 +14,8 @@ export interface BuiltinElement extends HTMLElement {
   /** Fills `<input type="nickname">` with the nickname the user chose above the keyboard. */
   omrFill?(value: string): void;
   /** Tells a `<camera>` whether it may show its preview, what it scans in `scanCode` mode, and when the background stops it. */
+  /** Tells an `<official-account>` whether it shows, with its `load` or `error` detail. */
+  omrAccountState?(state: { status: number; errMsg: string; name: string }): void;
   omrCameraState?(state: {
     error?: string;
     scan?: Record<string, unknown>;

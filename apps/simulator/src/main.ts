@@ -708,5 +708,6 @@ toLogic({
   launch: launchPath
     ? { path: launchPath, query: Object.fromEntries(new URLSearchParams(launchSearch)) }
     : undefined,
+  scene: Number(params.get("scene")) || undefined,
   theme,
 });

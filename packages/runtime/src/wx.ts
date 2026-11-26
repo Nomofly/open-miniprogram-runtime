@@ -58,6 +58,20 @@ const SCOPES_WITHOUT_AUTHORIZATION = new Set([
 ]);
 
 /** The order of the capsule's in-use icons. */
+/** Scenes that let `<official-account>` show, and scenes coming back to the app that keep it. */
+const OFFICIAL_ACCOUNT_LAUNCH_SCENES = new Set([1011, 1017, 1025, 1047, 1124]);
+const OFFICIAL_ACCOUNT_RETURN_SCENES = new Set([1001, 1038, 1041, 1089, 1090, 1104, 1131, 1187]);
+/** The `binderror` reasons of `<official-account>` by `status`, as WeChat documents them. */
+const OFFICIAL_ACCOUNT_ERRORS: Record<number, string> = {
+  [-2]: "网络错误",
+  [-1]: "数据解析错误",
+  1: "小程序关注公众号功能被封禁",
+  2: "关联公众号被封禁",
+  3: "关联关系解除或未选中关联公众号",
+  4: "未开启关注公众号功能",
+  5: "场景值错误",
+  6: "重复创建",
+};
 const PERMISSION_KINDS: PermissionKind[] = ["camera", "record", "location"];
 /** How long the capsule shows the location icon after a one-off `wx.getLocation`. */
 const LOCATION_IN_USE_MS = 3000;
@@ -583,6 +597,29 @@ export function createWx(host: WxHost) {
       if (release) host.sendView(webviewId, { type: "cameraState", cameraId, stopped });
     }
   };
+  /**
+   * Whether `<official-account>` may show: only after a launch from a scanned
+   * code (or the trial version's entry), and while the app came back from a
+   * scene that keeps that state, as WeChat documents since base library 2.18.1.
+   */
+  const officialAccountState = () => {
+    const config = host.manifest.config.officialAccount ?? {};
+    const launchScene = Number(host.launchOptions.scene);
+    const enterScene = Number(host.enterOptions().scene);
+    const status =
+      !OFFICIAL_ACCOUNT_LAUNCH_SCENES.has(launchScene) ||
+      !(
+        OFFICIAL_ACCOUNT_LAUNCH_SCENES.has(enterScene) ||
+        OFFICIAL_ACCOUNT_RETURN_SCENES.has(enterScene)
+      )
+        ? 5
+        : (config.status ?? 0);
+    return {
+      status,
+      errMsg: OFFICIAL_ACCOUNT_ERRORS[status] ?? "ok",
+      name: config.name ?? `${host.manifest.appName}公众号`,
+    };
+  };
   /** A page is gone with everything it was using. */
   const releasePage = (webviewId: number) => {
     appApis.hooks.releasePage(webviewId);
@@ -1034,6 +1071,7 @@ export function createWx(host: WxHost) {
     nicknameFocus,
     cameraMounted,
     stopCameras,
+    officialAccountState,
     observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
       observerApis.receive(...args),
     releasePage,

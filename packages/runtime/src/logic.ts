@@ -1608,6 +1608,13 @@ export function startLogic(
       case "imageMenu":
         void imageMenu();
         break;
+      case "officialAccount":
+        sendView(record, {
+          type: "officialAccountState",
+          accountId: message.accountId,
+          ...wxApi!.officialAccountState(),
+        });
+        break;
       case "navigateMiniProgram": {
         const { openType, props, target, handlers } = message;
         const api = {
@@ -1691,7 +1698,7 @@ export function startLogic(
     const launchOptions = {
       path: launch.path,
       query: { ...launch.query },
-      scene: 1001,
+      scene: message.scene ?? 1001,
       referrerInfo: {},
       apiCategory: "default",
     };

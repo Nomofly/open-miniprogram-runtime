@@ -38,6 +38,12 @@ export interface SimulatorConfig {
   };
   /** How `<ad>` and `<ad-custom>` load. */
   ad?: AdConfig;
+  /**
+   * The Official Account `<official-account>` shows, for the launch scenes WeChat
+   * allows (1011, 1017, 1025, 1047 and 1124); `status` (one of its 1 to 4) makes
+   * it fail to load even then.
+   */
+  officialAccount?: { name?: string; status?: number };
 }
 
 export interface AdConfig {
@@ -211,6 +217,8 @@ export type ViewToLogic =
   | { type: "videoFullScreen"; fullScreen: boolean }
   /** A long press on an `<image show-menu-by-longpress>`. */
   | { type: "imageMenu" }
+  /** An `<official-account>` was inserted and asks whether it may show. */
+  | { type: "officialAccount"; accountId: number }
   /**
    * A tap on a `<navigator target="miniProgram">`: its `open-type` and attributes,
    * and the handlers of its `success`, `fail` and `complete`.
@@ -272,6 +280,14 @@ export type LogicToView =
       error?: string;
       scan?: Record<string, unknown>;
       stopped?: boolean;
+    }
+  /** Whether an `<official-account>` shows (`status` 0) or fails, with the `load` or `error` detail and the account's name. */
+  | {
+      type: "officialAccountState";
+      accountId: number;
+      status: number;
+      errMsg: string;
+      name: string;
     }
   /** `this.animate`: plays WeChat keyframes on the elements a selector finds in a page's or component's template. */
   | {
@@ -444,6 +460,8 @@ export type ShellToLogic =
       storage?: Record<string, unknown>;
       /** The page to open first, instead of the app's entry page. */
       launch?: { path: string; query: Record<string, string> };
+      /** The launch scene, such as 1047 for a scanned Mini Program code; 1001 when absent. */
+      scene?: number;
       /** The system theme; light when absent. */
       theme?: Theme;
     }

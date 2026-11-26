@@ -23,6 +23,7 @@ import { WxEditor } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
 import { WxMap } from "./components/map.ts";
 import { WxAudio, WxImage, WxVideo } from "./components/media.ts";
+import { WxChannelLive, WxChannelVideo, WxOfficialAccount } from "./components/open-cards.ts";
 import { WxMovableArea, WxMovableView } from "./components/movable.ts";
 import { WxPicker } from "./components/picker.ts";
 import { WxPickerView, WxPickerViewColumn } from "./components/picker-view.ts";
@@ -622,9 +623,6 @@ const PLACEHOLDER_TAGS = [
   "live-player",
   "live-pusher",
   "voip-room",
-  "channel-live",
-  "channel-video",
-  "official-account",
   "official-account-publish",
   "store-coupon",
   "store-gift",
@@ -637,6 +635,9 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-image", WxImage],
   ["wx-cover-image", class extends WxImage {}],
   ["wx-cover-view", WxCoverView],
+  ["wx-official-account", WxOfficialAccount],
+  ["wx-channel-video", WxChannelVideo],
+  ["wx-channel-live", WxChannelLive],
   ["wx-icon", WxIcon],
   ["wx-input", WxInput],
   ["wx-textarea", WxTextarea],
@@ -719,8 +720,7 @@ wx-scroll-view[scroll-y] { overflow-y: auto; }
 wx-map, wx-canvas { width: 300px; height: 150px; }
 wx-live-player, wx-channel-video { width: 300px; height: 225px; }
 wx-live-pusher { width: 100%; }
-wx-ad, wx-ad-custom, wx-channel-live, wx-official-account-publish, wx-store-product, wx-store-home, wx-store-coupon, wx-store-gift { display: block; }
-wx-official-account { display: block; min-width: 300px; height: 84px; }
+wx-ad, wx-ad-custom, wx-official-account-publish, wx-store-product, wx-store-home, wx-store-coupon, wx-store-gift { display: block; }
 wx-web-view { position: fixed !important; inset: 0; width: 100%; height: 100%; z-index: 100; }
 wx-editor { display: block; position: relative; width: 100%; height: 200px; min-height: 200px; box-sizing: border-box; overflow: hidden; cursor: text; user-select: text; }
 :where(wx-editor) > :where(.ql-editor) { position: relative; height: 100%; box-sizing: border-box; padding: 12px 15px; overflow-y: auto; outline: none; white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; tab-size: 4; }
