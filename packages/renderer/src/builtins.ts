@@ -781,7 +781,7 @@ wx-button[loading]::before { content: ""; display: inline-block; width: 1em; hei
 .omr-picker-option { height: 48px; line-height: 48px; padding: 0 4px; text-align: center; color: rgba(0, 0, 0, 0.9); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 .omr-picker-view-mask { position: absolute; inset: 0; z-index: 3; pointer-events: none; background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.6)), linear-gradient(to top, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.6)); background-position: top, bottom; background-size: 100% var(--omr-mask-size, 102px); background-repeat: no-repeat; }
-.omr-picker-view-indicator { position: absolute; left: 0; right: 0; top: 50%; z-index: 3; height: var(--omr-item-height, 34px); transform: translateY(-50%); pointer-events: none; box-sizing: border-box; border-top: 1px solid rgba(0, 0, 0, 0.1); border-bottom: 1px solid rgba(0, 0, 0, 0.1); }
+.omr-picker-view-indicator { position: absolute; left: 0; right: 0; top: 50%; z-index: 3; height: 34px; transform: translateY(-50%); pointer-events: none; box-sizing: border-box; border-top: 1px solid rgba(0, 0, 0, 0.1); border-bottom: 1px solid rgba(0, 0, 0, 0.1); }
 
 /* DarkMode: with "darkmode": true, built-in components take dark defaults in the dark theme (WeUI's dark palette) */
 :where(.omr-dark) wx-button { color: rgba(255, 255, 255, 0.8); background-color: rgba(255, 255, 255, 0.08); }

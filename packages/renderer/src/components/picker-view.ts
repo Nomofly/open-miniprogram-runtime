@@ -12,6 +12,8 @@ export class WxPickerViewColumn extends Builtin {
     const root = this.shadow(`<style>
       :host { display: block; position: relative; flex: 1; height: 100%; overflow: hidden; touch-action: none; }
       .content { will-change: transform; }
+      /* Each item is as tall as the picker view's indicator, as WeChat makes it */
+      ::slotted(*) { height: var(--omr-item-height) !important; box-sizing: border-box; overflow: hidden; }
     </style><div class="content"><slot></slot></div>`);
     this.wheel = new Wheel(this, root.querySelector(".content")!, {
       pickStart: () => this.pickerView()?.picking("pickstart"),
@@ -23,10 +25,6 @@ export class WxPickerViewColumn extends Builtin {
   }
   private pickerView(): WxPickerView | undefined {
     return this.parentElement instanceof WxPickerView ? this.parentElement : undefined;
-  }
-  /** The height of one item: the first item's, as WeChat measures it. */
-  itemHeight(): number {
-    return (this.firstElementChild as HTMLElement | null)?.offsetHeight || DEFAULT_ITEM_HEIGHT;
   }
   measure(itemHeight: number): void {
     this.wheel.layout(itemHeight, this.childElementCount, this.clientHeight);
@@ -47,12 +45,15 @@ export class WxPickerView extends Builtin {
   /** The value the columns show, as last reported. */
   private current: number[] = [];
   private readonly resize = new ResizeObserver(() => this.schedule());
+  /** Gives the columns the item height, which they inherit. */
+  private readonly sizing: HTMLStyleElement;
   constructor() {
     super();
-    this.shadow(`<style>
+    const root = this.shadow(`<style>
       :host { display: block; position: relative; overflow: hidden; }
       .columns { display: flex; height: 100%; }
-    </style><div class="columns"><slot></slot></div><slot name="omr-overlay"></slot>`);
+    </style><style></style><div class="columns"><slot></slot></div><slot name="omr-overlay"></slot>`);
+    this.sizing = root.querySelectorAll("style")[1]!;
     this.mask.slot = this.indicator.slot = "omr-overlay";
   }
   connectedCallback(): void {
@@ -93,16 +94,13 @@ export class WxPickerView extends Builtin {
   }
   private layout(apply: boolean): void {
     const columns = this.columns();
-    const itemHeight = columns[0]?.itemHeight() ?? DEFAULT_ITEM_HEIGHT;
-    this.indicator.style.setProperty("--omr-item-height", `${itemHeight}px`);
+    // `indicator-style` and `indicator-class` set the height of every item
+    const itemHeight = this.indicator.offsetHeight || DEFAULT_ITEM_HEIGHT;
+    this.sizing.textContent = `:host { --omr-item-height: ${itemHeight}px; }`;
     const height = this.clientHeight;
-    const indicatorHeight = this.indicator.offsetHeight || itemHeight;
-    this.mask.style.setProperty(
-      "--omr-mask-size",
-      `${Math.max(0, (height - indicatorHeight) / 2)}px`,
-    );
+    this.mask.style.setProperty("--omr-mask-size", `${Math.max(0, (height - itemHeight) / 2)}px`);
     columns.forEach((column, index) => {
-      column.measure(column.itemHeight());
+      column.measure(itemHeight);
       if (apply) column.wheel.setIndex(this.values[index] ?? 0);
     });
     this.current = columns.map((column) => column.wheel.index);
