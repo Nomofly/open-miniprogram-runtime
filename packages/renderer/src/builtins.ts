@@ -11,7 +11,7 @@
 import { CANVAS_DEFINITIONS } from "./canvas.ts";
 import { toText } from "./expression.ts";
 import { WxAd, WxAdCustom } from "./components/ad.ts";
-import { BRAND_GREEN, Builtin, emit, lengthOf } from "./components/base.ts";
+import { Applied, BRAND_GREEN, Builtin, emit, lengthOf } from "./components/base.ts";
 import {
   WxMatchMedia,
   WxPageContainer,
@@ -308,6 +308,10 @@ class WxSlider extends Builtin {
 
 class WxProgress extends Builtin {
   private readonly root: ShadowRoot;
+  private readonly applied = new Applied();
+  /** The percent the bar shows now, which an animation moves towards `percent`. */
+  private shown = 0;
+  private frame = 0;
   constructor() {
     super();
     this.root = this.shadow(`<style>
@@ -326,13 +330,44 @@ class WxProgress extends Builtin {
     bar.style.height = `${lengthOf(this.props["stroke-width"], 6)}px`;
     bar.style.background = colorOf(this.props, "background-color", "backgroundColor") || "#ebebeb";
     bar.style.borderRadius = radius;
-    inner.style.width = `${percent}%`;
     inner.style.background =
       colorOf(this.props, "active-color", "activeColor", "color") || BRAND_GREEN();
     inner.style.borderRadius = radius;
     info.hidden = !this.flag("show-info");
-    info.textContent = `${percent}%`;
     info.style.fontSize = `${lengthOf(this.props["font-size"], 16)}px`;
+    // A new percent, or turning `active` on, plays the animation; other changes keep the bar where it is
+    const percentChanged = this.applied.changed("percent", percent);
+    const activeChanged = this.applied.changed("active", this.flag("active"));
+    if (!percentChanged && !activeChanged) return;
+    cancelAnimationFrame(this.frame);
+    if (!this.flag("active")) {
+      this.show(percent);
+      return;
+    }
+    // backwards starts from 0 each time; forwards goes on from where the bar is
+    const from = this.str("active-mode", "backwards") === "forwards" ? this.shown : 0;
+    const perPercent = Math.max(0, this.num("duration", 30));
+    const total = Math.abs(percent - from) * perPercent;
+    const start = performance.now();
+    const step = (now: number) => {
+      const progress = total > 0 ? Math.min(1, (now - start) / total) : 1;
+      this.show(from + (percent - from) * progress);
+      if (progress < 1) {
+        this.frame = requestAnimationFrame(step);
+      } else {
+        emit(this, "activeend", { curPercent: percent });
+      }
+    };
+    this.show(from);
+    this.frame = requestAnimationFrame(step);
+  }
+  private show(percent: number): void {
+    this.shown = percent;
+    this.root.querySelector<HTMLElement>(".inner")!.style.width = `${percent}%`;
+    this.root.querySelector<HTMLElement>(".info")!.textContent = `${Math.round(percent)}%`;
+  }
+  disconnectedCallback(): void {
+    cancelAnimationFrame(this.frame);
   }
 }
 

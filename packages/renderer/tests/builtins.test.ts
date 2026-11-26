@@ -29,6 +29,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("swiper", () => {
@@ -105,6 +106,61 @@ describe("progress", () => {
     expect(root.querySelector<HTMLElement>(".inner")!.style.background).toBe("red");
     expect(bar.style.background).toBe("yellow");
     expect(bar.style.height).toBe(`${window.innerWidth}px`);
+  });
+
+  test("active animates at duration ms per percent and fires activeend; forwards goes on from where it was", () => {
+    // Frames run when the test says, at the time it says
+    let now = 0;
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => frames.push(fn));
+    vi.stubGlobal("cancelAnimationFrame", () => (frames.length = 0));
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const tick = (to: number) => {
+      now = to;
+      for (const fn of frames.splice(0)) fn(now);
+    };
+    const fired: Record<string, unknown>[] = [];
+    const props = { percent: 50, active: true, duration: 10, "show-info": true };
+    const progress = mount("wx-progress", props);
+    progress.addEventListener("omr-event", (event) =>
+      fired.push((event as CustomEvent<{ name: string; detail: Record<string, unknown> }>).detail),
+    );
+    const inner = progress.shadowRoot!.querySelector<HTMLElement>(".inner")!;
+    const info = progress.shadowRoot!.querySelector<HTMLElement>(".info")!;
+    expect(inner.style.width).toBe("0%");
+    // 50% at 10 ms each takes 500 ms
+    tick(250);
+    expect(inner.style.width).toBe("25%");
+    expect(info.textContent).toBe("25%");
+    tick(500);
+    expect(inner.style.width).toBe("50%");
+    expect(fired).toEqual([{ name: "activeend", detail: { curPercent: 50 } }]);
+
+    // backwards (the default) starts again from 0
+    progress.omrUpdate({ ...props, percent: 80 });
+    expect(inner.style.width).toBe("0%");
+    tick(500 + 400);
+    expect(inner.style.width).toBe("40%");
+    tick(500 + 800);
+    expect(inner.style.width).toBe("80%");
+
+    // forwards goes from 80 down to 60 in 200 ms
+    progress.omrUpdate({ ...props, percent: 60, "active-mode": "forwards" });
+    expect(inner.style.width).toBe("80%");
+    tick(1300 + 100);
+    expect(inner.style.width).toBe("70%");
+    tick(1300 + 200);
+    expect(fired.at(-1)).toEqual({ name: "activeend", detail: { curPercent: 60 } });
+
+    // A change of color alone does not replay it
+    progress.omrUpdate({ ...props, percent: 60, "active-mode": "forwards", activeColor: "red" });
+    expect(inner.style.width).toBe("60%");
+    expect(frames).toHaveLength(0);
+  });
+
+  test("without active the bar jumps to percent and fires nothing", () => {
+    const progress = mount("wx-progress", { percent: 30 });
+    expect(progress.shadowRoot!.querySelector<HTMLElement>(".inner")!.style.width).toBe("30%");
   });
 
   test("camelCase colors still work", () => {
