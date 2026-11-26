@@ -7,9 +7,11 @@
  * user agent. It drops the headers that would stop the page from being framed
  * or from running the injected script.
  */
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { WebViewBridgeConfig } from "../src/web-view-bridge.ts";
+import { ownCookies, prefixCookie } from "../src/web-view-cookies.ts";
 import { webViewErrorPage } from "../src/web-view-error-page.ts";
 
 export interface WebViewProxies {
@@ -52,12 +54,6 @@ const RESPONSE_DROPPED = new Set([
 export function createWebViewProxies(bridge: () => Promise<string>): WebViewProxies {
   const proxies = new Map<string, Promise<{ servers: Server[]; port: number }>>();
   let userAgent = "";
-  /**
-   * The origins that set each cookie name. Browsers keep cookies by host, not
-   * port, so every proxy gets every cookie; each origin's server gets back only
-   * those it set, and those set by the page's scripts, as it would on its own.
-   */
-  const cookieOrigins = new Map<string, Set<string>>();
 
   const open = (origin: string, address: string) => {
     // An IPv4 client of a dual-stack server
@@ -106,10 +102,8 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
         text = origin + text.slice(self.length);
       }
       if (name === "cookie") {
-        text = text
-          .split(/;\s*/)
-          .filter((pair) => cookieOrigins.get(cookieName(pair))?.has(origin) ?? true)
-          .join("; ");
+        // The browser sends every origin's cookies; this origin gets only its own
+        text = ownCookies(text, cookiePrefix(origin));
         if (!text) continue;
       }
       headers[name] = text;
@@ -123,7 +117,12 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
     } catch (error) {
       if (!isDocument) throw error;
       const cause = (error as Error & { cause?: Error }).cause;
-      const script = await bridgeScript({ origin, userAgent, error: errorOf(target) });
+      const script = await bridgeScript({
+        origin,
+        userAgent,
+        cookiePrefix: cookiePrefix(origin),
+        error: errorOf(target),
+      });
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
@@ -135,13 +134,10 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
     response.headers.forEach((value, name) => {
       if (!RESPONSE_DROPPED.has(name)) out[name] = value;
     });
-    // Cookies belong to the proxy's host now
-    const secure = isLoopback(new URL(self).hostname);
-    const cookies = response.headers.getSetCookie().map((cookie) => {
-      const name = cookieName(cookie);
-      cookieOrigins.set(name, (cookieOrigins.get(name) ?? new Set()).add(origin));
-      return rewriteCookie(cookie, secure);
-    });
+    // Cookies belong to the proxy's host now, named for this origin
+    const cookies = response.headers
+      .getSetCookie()
+      .map((cookie) => prefixCookie(cookie, cookiePrefix(origin)));
     if (cookies.length > 0) out["set-cookie"] = cookies;
     const location = response.headers.get("location");
     if (location !== null) {
@@ -157,7 +153,10 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
     let bytes: Buffer = Buffer.from(await response.arrayBuffer());
     if (isDocument && /^text\/html\b/i.test(response.headers.get("content-type") ?? "")) {
       out["cache-control"] = "no-store";
-      bytes = injectHtml(bytes, await bridgeScript({ origin, userAgent }));
+      bytes = injectHtml(
+        bytes,
+        await bridgeScript({ origin, userAgent, cookiePrefix: cookiePrefix(origin) }),
+      );
     }
     res.writeHead(response.status, out);
     res.end(method === "HEAD" ? undefined : bytes);
@@ -216,7 +215,9 @@ async function listenAll(
           await listen(server, port, host);
           servers.push(server);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EADDRNOTAVAIL") throw error;
+          // No such address, or no IPv6 at all
+          const { code } = error as NodeJS.ErrnoException;
+          if (code !== "EADDRNOTAVAIL" && code !== "EAFNOSUPPORT") throw error;
         }
       }
       return { servers, port };
@@ -245,31 +246,12 @@ export function injectHtml(bytes: Buffer, script: string): Buffer {
   return Buffer.concat([bytes.subarray(0, at), Buffer.from(script, "latin1"), bytes.subarray(at)]);
 }
 
-/** The name of a cookie, from a `Set-Cookie` value or a pair of a `Cookie` header. */
-const cookieName = (cookie: string) => cookie.split(/[=;]/, 1)[0]!.trim();
-
-/** Hosts whose plain http pages browsers trust with `Secure` cookies. */
-const isLoopback = (hostname: string) =>
-  hostname === "localhost" ||
-  hostname.endsWith(".localhost") ||
-  hostname === "[::1]" ||
-  /^127\.\d+\.\d+\.\d+$/.test(hostname);
-
 /**
- * Drops `Domain`, so a cookie the real site sets for its domain is kept for
- * the proxy's host. The proxy serves plain http, where browsers refuse
- * `Secure` cookies except on loopback hosts: elsewhere, unless `secure`, the
- * cookie loses `Secure`, and `SameSite=None`, which needs it, becomes `Lax`,
- * which the proxy's frames still get, being on the simulator's site. Cookies
- * named `__Secure-` or `__Host-` still need `Secure`.
+ * The prefix of an origin's cookie names: the same for every run, so cookies
+ * the browser kept still belong to their origin.
  */
-export function rewriteCookie(cookie: string, secure: boolean): string {
-  return cookie
-    .split(";")
-    .filter((part) => !/^\s*domain\s*=/i.test(part) && (secure || !/^\s*secure\s*$/i.test(part)))
-    .map((part) => (secure ? part : part.replace(/^(\s*samesite\s*=\s*)none\s*$/i, "$1Lax")))
-    .join(";");
-}
+export const cookiePrefix = (origin: string) =>
+  `omr${createHash("sha256").update(origin).digest("hex").slice(0, 8)}_`;
 
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {

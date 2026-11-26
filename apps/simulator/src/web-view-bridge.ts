@@ -6,14 +6,18 @@
  * `postMessage`; the shell answers them through the logic layer.
  *
  * The page runs at the proxy's origin, which mirrors the real one path for
- * path, so links and history work as on the real site.
+ * path, so links and history work as on the real site. Its `document.cookie`
+ * shows only its own origin's cookies (see `web-view-cookies.ts`).
  */
+import { ownCookies, prefixCookie } from "./web-view-cookies.ts";
 
 /** Set by the proxy in a script before this one. */
 export interface WebViewBridgeConfig {
   /** The real origin the proxy stands in for, such as `https://h5.example.com`. */
   origin: string;
   userAgent: string;
+  /** The prefix of this origin's cookie names, which `document.cookie` hides. */
+  cookiePrefix: string;
   /** Set on the proxy's error page: the document could not be loaded. */
   error?: { url: string; fullUrl: string };
 }
@@ -77,6 +81,17 @@ if (config && window.parent !== window) {
       configurable: true,
     });
     scope.__wxjs_environment = "miniprogram";
+    // The page reads and writes only its own origin's cookies, by their own names
+    const cookie = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")!;
+    Object.defineProperty(Document.prototype, "cookie", {
+      get(this: Document) {
+        return ownCookies(cookie.get!.call(this) as string, config.cookiePrefix);
+      },
+      set(this: Document, value: unknown) {
+        cookie.set!.call(this, prefixCookie(String(value), config.cookiePrefix));
+      },
+      configurable: true,
+    });
 
     let nextCallId = 0;
     const pending = new Map<number, Callback>();

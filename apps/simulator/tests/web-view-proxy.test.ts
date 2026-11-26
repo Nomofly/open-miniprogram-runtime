@@ -1,7 +1,7 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test } from "vite-plus/test";
-import { createWebViewProxies, rewriteCookie } from "../server/web-view-proxy.ts";
+import { cookiePrefix, createWebViewProxies } from "../server/web-view-proxy.ts";
 
 const servers: Server[] = [];
 const proxies = createWebViewProxies(async () => "");
@@ -11,15 +11,12 @@ afterEach(() => {
   proxies.close();
 });
 
-/** A real site, which sets a cookie named after itself and remembers the headers it was sent. */
-async function site(name: string) {
+/** A real site, which sets the cookie `sid` and remembers the headers it was sent. */
+async function site(cookie: string) {
   const seen: IncomingHttpHeaders[] = [];
   const server = createServer((req, res) => {
     seen.push(req.headers);
-    res.writeHead(200, {
-      "content-type": "text/plain",
-      "set-cookie": `${name}=1; Domain=example.com; Path=/; Secure; SameSite=None`,
-    });
+    res.writeHead(200, { "content-type": "text/plain", "set-cookie": cookie });
     res.end("ok");
   });
   servers.push(server);
@@ -27,23 +24,30 @@ async function site(name: string) {
   return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen };
 }
 
-test("each origin's server gets back only the cookies it set, and its proxy listens on the simulator's address alone", async () => {
-  const a = await site("a");
-  const b = await site("b");
+test("each origin's server gets back only its own cookies, even ones named like another origin's, and its proxy listens on loopback alone", async () => {
+  const a = await site("sid=secret; Domain=example.com; Path=/; Secure; HttpOnly; SameSite=None");
+  // Another site setting the same name on another path must not get the first one's value
+  const b = await site("sid=marker; Path=/unused");
   const portA = await proxies.open(a.origin, "WeChat", "127.0.0.1");
   const portB = await proxies.open(b.origin, "WeChat", "127.0.0.1");
+  const [prefixA, prefixB] = [cookiePrefix(a.origin), cookiePrefix(b.origin)];
+  expect(prefixA).not.toBe(prefixB);
 
+  // Named for the origin, kept for the proxy's host; Secure stays, as loopback http keeps it
   const first = await fetch(`http://127.0.0.1:${portA}/`);
-  // On a loopback host browsers keep Secure cookies over http, so only Domain goes
-  expect(first.headers.getSetCookie()).toEqual(["a=1; Path=/; Secure; SameSite=None"]);
-  await fetch(`http://127.0.0.1:${portB}/`);
+  expect(first.headers.getSetCookie()).toEqual([
+    `${prefixA}sid=secret; Path=/; Secure; HttpOnly; SameSite=None`,
+  ]);
+  expect((await fetch(`http://127.0.0.1:${portB}/`)).headers.getSetCookie()).toEqual([
+    `${prefixB}sid=marker; Path=/unused`,
+  ]);
 
   // The browser sends every cookie of the host to both proxies
-  const cookie = "a=1; b=1; script=1";
+  const cookie = `${prefixA}sid=secret; ${prefixB}sid=marker; other=1`;
   await fetch(`http://127.0.0.1:${portA}/`, { headers: { cookie } });
-  await fetch(`http://127.0.0.1:${portB}/`, { headers: { cookie } });
-  expect(a.seen.at(-1)!.cookie).toBe("a=1; script=1");
-  expect(b.seen.at(-1)!.cookie).toBe("b=1; script=1");
+  await fetch(`http://127.0.0.1:${portB}/collect`, { headers: { cookie } });
+  expect(a.seen.at(-1)!.cookie).toBe("sid=secret");
+  expect(b.seen.at(-1)!.cookie).toBe("sid=marker");
 
   // Reachable at either loopback address, whichever one localhost resolves to
   expect(await (await fetch(`http://[::1]:${portA}/`)).text()).toBe("ok");
@@ -55,12 +59,4 @@ test("each origin's server gets back only the cookies it set, and its proxy list
     .flat()
     .find((net) => net && net.family === "IPv4" && !net.internal)?.address;
   if (other) await expect(fetch(`http://${other}:${portA}/`)).rejects.toThrow();
-});
-
-test("away from loopback, cookies drop Secure and SameSite=None becomes Lax", () => {
-  expect(
-    rewriteCookie("sid=1; Domain=.example.com; Path=/; Secure; HttpOnly; SameSite=None", false),
-  ).toBe("sid=1; Path=/; HttpOnly; SameSite=Lax");
-  expect(rewriteCookie("sid=1; SameSite=Strict; secure", false)).toBe("sid=1; SameSite=Strict");
-  expect(rewriteCookie("sid=1; Secure; SameSite=None", true)).toBe("sid=1; Secure; SameSite=None");
 });
