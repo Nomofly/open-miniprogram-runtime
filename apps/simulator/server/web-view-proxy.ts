@@ -59,9 +59,9 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
     // An IPv4 client of a dual-stack server
     const host = address.replace(/^::ffff:(?=\d+\.)/, "");
     // `localhost` may resolve to either loopback address, so a loopback proxy listens on both
-    // An address such as 127.0.0.2 stays reachable beside them
+    // An address such as 127.0.0.2 stays reachable beside them; sorted, so either family finds the same proxy
     const hosts = isLoopbackAddress(host)
-      ? [...new Set([host, ...LOOPBACK])].filter((name) => name !== "localhost")
+      ? [...new Set([host, ...LOOPBACK])].filter((name) => name !== "localhost").sort()
       : [host];
     const key = `${hosts.join(" ")} ${origin}`;
     let proxy = proxies.get(key);
