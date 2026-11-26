@@ -209,6 +209,8 @@ export type ViewToLogic =
   | { type: "navigationBar"; attributes: Record<string, unknown> }
   /** A `<video>` of the page entered full screen, or the last one left it. */
   | { type: "videoFullScreen"; fullScreen: boolean }
+  /** A long press on an `<image show-menu-by-longpress>`. */
+  | { type: "imageMenu" }
   /**
    * The page's `<web-view>`: its `src` and the handlers bound to its events,
    * sent when either changes; without `src`, the page has none any more.

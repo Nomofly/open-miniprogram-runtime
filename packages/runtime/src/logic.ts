@@ -1199,6 +1199,34 @@ export function startLogic(
     return pairs.length > 0 ? `?${pairs.join("&")}` : "";
   };
 
+  /**
+   * The menu WeChat shows on a long press of an `<image show-menu-by-longpress>`.
+   * Its items act in WeChat, not in the Mini Program, which hears nothing of
+   * them; codes in the image are not recognized.
+   */
+  const imageMenu = async () => {
+    const toast =
+      (title: string, icon = "success") =>
+      () =>
+        void shellUi("showToast", { title, icon, duration: 1500 }).catch(() => {});
+    const items: [string, () => void][] = [
+      ["发送给朋友", toast("已发送")],
+      ["收藏", toast("已收藏")],
+      ["保存图片", toast("已保存到系统相册", "none")],
+      // Opens WeChat's search, which the simulator does not have
+      ["搜一搜", () => {}],
+    ];
+    try {
+      const { tapIndex } = await shellUi("showActionSheet", {
+        itemList: items.map(([label]) => label),
+        itemColor: "#000000",
+      });
+      items[tapIndex as number]?.[1]();
+    } catch {
+      // Cancelled
+    }
+  };
+
   /** The capsule menu: share options the page supports, then the Mini Program's own. */
   const openMenu = async () => {
     const record = stack[stack.length - 1];
@@ -1576,6 +1604,9 @@ export function startLogic(
         break;
       case "pageContainer":
         record.containerOpen = message.open;
+        break;
+      case "imageMenu":
+        void imageMenu();
         break;
       case "viewReply":
         wxApi!.app.viewReply(record.webviewId, message.requestId, message.result, message.error);

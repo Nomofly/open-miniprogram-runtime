@@ -1267,4 +1267,24 @@ describe("logic layer", () => {
     expect(atob(detail!.iv!)).toHaveLength(16);
     expect(detail!.cloudID).toMatch(/^\w+$/);
   });
+
+  test("a long press on an image with show-menu-by-longpress opens WeChat's image menu", async () => {
+    const { sent, view, handle } = boot(
+      { "app.js": APP, "pages/index/index.js": "Page({});" },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "imageMenu" });
+    await settle();
+    const uis = () =>
+      sent.filter((message) => message.type === "ui") as Extract<LogicToShell, { type: "ui" }>[];
+    expect(uis()[0]).toMatchObject({
+      name: "showActionSheet",
+      args: { itemList: ["发送给朋友", "收藏", "保存图片", "搜一搜"] },
+    });
+
+    handle({ type: "uiResult", callId: uis()[0]!.callId, result: { tapIndex: 2 } });
+    await settle();
+    expect(uis()[1]).toMatchObject({ name: "showToast", args: { title: "已保存到系统相册" } });
+  });
 });

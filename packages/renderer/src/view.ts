@@ -895,6 +895,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         const detail = { x: event.pageX, y: event.pageY };
         if (dispatch(target, "longpress", detail, true)) suppressTap = true;
         dispatch(target, "longtap", detail, true);
+        if (
+          target.localName === "wx-image" &&
+          states.get(target)?.props["show-menu-by-longpress"]
+        ) {
+          suppressTap = true;
+          post({ type: "imageMenu" });
+        }
       }, 350),
     };
   });
