@@ -66,6 +66,11 @@ class PickerSheet {
     this.mask.addEventListener("click", () => handlers.cancel());
     confirm.addEventListener("click", () => handlers.confirm());
     document.body.append(this.mask, this.sheet);
+    // In the top layer, so it opens over a root-portal it may sit in
+    for (const layer of [this.mask, this.sheet]) {
+      layer.popover = "manual";
+      layer.showPopover();
+    }
     // Slide in on the next frame, once the closed position has been laid out
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {

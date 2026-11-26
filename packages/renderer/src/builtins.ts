@@ -703,8 +703,9 @@ wx-button[disabled][type="warn"] { color: rgba(255, 255, 255, 0.6); background-c
 wx-button[loading]::before { content: ""; display: inline-block; width: 1em; height: 1em; margin-right: 0.5em; vertical-align: -0.15em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; box-sizing: border-box; animation: omr-spin 1s linear infinite; }
 @keyframes omr-spin { to { transform: rotate(360deg); } }
 
-.omr-picker-mask { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.6); opacity: 0; transition: opacity 0.3s; }
-.omr-picker { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; padding-bottom: env(safe-area-inset-bottom); background: #fff; border-radius: 12px 12px 0 0; font-size: 17px; transform: translateY(100%); transition: transform 0.3s ease; user-select: none; }
+.omr-picker-mask, .omr-picker { width: auto; height: auto; margin: 0; border: 0; overflow: visible; color: inherit; }
+.omr-picker-mask { position: fixed; inset: 0; z-index: 1000; padding: 0; background: rgba(0, 0, 0, 0.6); opacity: 0; transition: opacity 0.3s; }
+.omr-picker { position: fixed; inset: auto 0 0 0; z-index: 1001; padding: 0 0 env(safe-area-inset-bottom); background: #fff; border-radius: 12px 12px 0 0; font-size: 17px; transform: translateY(100%); transition: transform 0.3s ease; user-select: none; }
 .omr-picker-mask.omr-open { opacity: 1; }
 .omr-picker.omr-open { transform: none; }
 .omr-picker-header { display: flex; align-items: center; height: 56px; padding: 0 24px; }

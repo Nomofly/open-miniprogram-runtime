@@ -116,7 +116,12 @@ export class WxPageContainer extends Builtin {
   }
 }
 
-/** Takes its children out of the page's layout, as if fixed at the top left of the page. */
+/**
+ * Takes its children out of the page, as if fixed at the top left of the page's
+ * root. It is shown in the top layer, so no transformed or clipping ancestor,
+ * such as a swiper-item or a scroll-view, moves or cuts it, while it stays in
+ * the tree for events, styles and updates.
+ */
 export class WxRootPortal extends Builtin {
   private readonly placement: HTMLStyleElement;
   constructor() {
@@ -124,10 +129,24 @@ export class WxRootPortal extends Builtin {
     const root = this.shadow(`<style></style><slot></slot>`);
     this.placement = root.querySelector("style")!;
   }
+  connectedCallback(): void {
+    this.place();
+  }
   protected override update(): void {
+    // Undo the top layer's own popover styles
     this.placement.textContent = this.flagOn("enable")
-      ? ":host { display: block; position: fixed !important; top: 0; left: 0; width: 100%; height: 0; overflow: visible; }"
+      ? ":host { display: block; position: fixed !important; inset: 0 auto auto 0; width: 100%; height: 0; margin: 0; padding: 0; border: 0; overflow: visible; color: inherit; background: none; }"
       : ":host { display: contents; }";
+    this.place();
+  }
+  /** Leaving the document hides the popover, so it is shown again whenever it is connected. */
+  private place(): void {
+    if (!this.flagOn("enable")) {
+      this.popover = null;
+      return;
+    }
+    this.popover = "manual";
+    if (this.isConnected && !this.matches(":popover-open")) this.showPopover();
   }
 }
 
