@@ -15,6 +15,7 @@ import { Applied, BRAND_GREEN, Builtin, emit, lengthOf } from "./components/base
 import {
   WxMatchMedia,
   WxPageContainer,
+  WxShareElement,
   WxPageMeta,
   WxRootPortal,
 } from "./components/containers.ts";
@@ -695,6 +696,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-official-account-publish", WxOfficialAccountPublish],
   ["wx-reward", WxReward],
   ["wx-page-container", WxPageContainer],
+  ["wx-share-element", WxShareElement],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],
   ["wx-page-meta", WxPageMeta],
@@ -724,7 +726,7 @@ body { min-height: 100%; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", sans-serif; font-size: 16px; -webkit-tap-highlight-color: transparent; user-select: none; cursor: default; }
 [hidden] { display: none !important; }
 omr-slot { display: contents; }
-wx-view, wx-cover-view, wx-form, wx-navigator, wx-picker, wx-movable-area, wx-picker-view, wx-rich-text, wx-swiper-item, wx-share-element, wx-selection, wx-functional-page-navigator { display: block; }
+wx-view, wx-cover-view, wx-form, wx-navigator, wx-picker, wx-movable-area, wx-picker-view, wx-rich-text, wx-swiper-item, wx-selection, wx-functional-page-navigator { display: block; }
 /* Skyline-only components render their children as plain containers; gesture handlers and span draw nothing of their own */
 wx-list-view, wx-sticky-header, wx-sticky-section, wx-draggable-sheet, wx-nested-scroll-header, wx-nested-scroll-body, wx-list-builder, wx-grid-builder, wx-open-container, wx-snapshot, wx-large-image, wx-open-data-item, wx-open-data-list { display: block; }
 wx-sticky-header { position: sticky; top: 0; z-index: 1; }

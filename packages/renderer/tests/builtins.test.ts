@@ -261,7 +261,7 @@ describe("selection", () => {
       return details.at(-1);
     };
 
-    sel.omrCall!("selectRange", [4, 8]);
+    void sel.omrCall!("selectRange", [4, 8]);
     expect(await next()).toMatchObject({
       isCollapsed: false,
       selectedString: "o wo",
@@ -282,7 +282,7 @@ describe("selection", () => {
     });
     expect(outside!.firstOffset).toBeUndefined();
 
-    sel.omrCall!("removeSelection", []);
+    void sel.omrCall!("removeSelection", []);
     expect(await next()).toMatchObject({ isCollapsed: true, selectedString: "" });
     const count = details.length;
     await next();

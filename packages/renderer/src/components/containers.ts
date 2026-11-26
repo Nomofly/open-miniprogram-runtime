@@ -1,6 +1,6 @@
 /**
- * Containers that change where or whether their children show: `<page-container>`,
- * `<root-portal>`, `<match-media>`, and the page configuration nodes
+ * Containers that change where or whether their children show: `<page-container>`
+ * with its `<share-element>`s, `<root-portal>`, `<match-media>`, and the page configuration nodes
  * `<page-meta>` and `<navigation-bar>`.
  */
 import { Applied, Builtin, convertStyle, emit, lengthOf, trackDrag } from "./base.ts";
@@ -91,6 +91,19 @@ export class WxPageContainer extends Builtin {
     this.phase = "entering";
     this.update();
     const layer = this.panel.parentElement!;
+    const pairs = this.sharedPairs();
+    if (pairs.length) {
+      // Where the shared elements land: laid out open without the transition, then closed again
+      this.panel.style.transition = "none";
+      layer.classList.add("open");
+      const targets = pairs.map(([, inside]) => inside.getBoundingClientRect());
+      layer.classList.remove("open");
+      void layer.offsetWidth;
+      this.panel.style.transition = "";
+      pairs.forEach(([outside, inside], index) =>
+        inside.fly(outside.getBoundingClientRect(), targets[index]!, outside),
+      );
+    }
     // Lay out closed, then open, so the transition runs
     void layer.offsetWidth;
     layer.classList.add("open");
@@ -100,12 +113,29 @@ export class WxPageContainer extends Builtin {
       emit(this, "afterenter");
     }, this.duration());
   }
+  /**
+   * The `<share-element>`s in the page and in this container with the same
+   * key, where either has `transform`.
+   */
+  private sharedPairs(): [WxShareElement, WxShareElement][] {
+    const inside = [...this.querySelectorAll<WxShareElement>("wx-share-element")];
+    const outside = [...document.querySelectorAll<WxShareElement>("wx-share-element")].filter(
+      (el) => !el.parentElement?.closest("wx-page-container"),
+    );
+    return inside.flatMap((target): [WxShareElement, WxShareElement][] => {
+      const source = outside.find((el) => el.shareKey && el.shareKey === target.shareKey);
+      return source && (source.animates || target.animates) ? [[source, target]] : [];
+    });
+  }
   private leave(): void {
     if (this.phase === "hidden" || this.phase === "leaving") return;
     clearTimeout(this.timer);
     emit(this, "beforeleave");
     this.phase = "leaving";
     this.report(false);
+    for (const [outside, inside] of this.sharedPairs()) {
+      outside.fly(inside.getBoundingClientRect(), outside.getBoundingClientRect(), inside);
+    }
     this.panel.parentElement!.classList.remove("open");
     emit(this, "leave");
     this.timer = setTimeout(() => {
@@ -113,6 +143,80 @@ export class WxPageContainer extends Builtin {
       this.update();
       emit(this, "afterleave");
     }, this.duration());
+  }
+}
+
+/**
+ * `<share-element>`: a page element and one in a `<page-container>` with the
+ * same `key` (or the older `name`) are one element that flies between them as
+ * the container opens and closes. The element it lands on flies: its content
+ * goes to the top layer, above the overlay and unclipped by the panel, and
+ * moves from the other's place to its own while both keep their room.
+ */
+export class WxShareElement extends Builtin {
+  private readonly flight: HTMLElement;
+  private readonly hold: HTMLStyleElement;
+  private animation?: Animation;
+  constructor() {
+    super();
+    const root = this.shadow(`<style>
+      :host { display: block; }
+      .flight { display: contents; }
+      .flight:popover-open { display: block; position: fixed; inset: auto; margin: 0; padding: 0; border: 0; overflow: visible; background: none; color: inherit; font: inherit; box-sizing: border-box; transform-origin: 0 0; }
+    </style><style></style><div class="flight" popover="manual"><slot></slot></div>`);
+    this.hold = root.querySelectorAll("style")[1]!;
+    this.flight = root.querySelector(".flight")!;
+  }
+  get shareKey(): string {
+    return this.str("key") || this.str("name");
+  }
+  get animates(): boolean {
+    return this.flag("transform");
+  }
+  /** Flies the content from a place to this element's place, `to`, hiding `other` meanwhile. */
+  fly(from: DOMRect, to: DOMRect, other: WxShareElement): void {
+    this.animation?.finish();
+    const width = this.offsetWidth;
+    const height = this.offsetHeight;
+    this.hold.textContent = `:host { width: ${width}px !important; height: ${height}px !important; }`;
+    other.hide(true);
+    Object.assign(this.flight.style, {
+      left: `${to.left}px`,
+      top: `${to.top}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    });
+    this.flight.showPopover();
+    const scale = (a: number, b: number) => (b > 0 ? a / b : 1);
+    const keyframes = [
+      {
+        transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${scale(from.width, to.width)}, ${scale(from.height, to.height)})`,
+      },
+      { transform: `scale(${scale(to.width, width)}, ${scale(to.height, height)})` },
+    ];
+    const timing = { duration: Math.max(0, this.num("duration", 300)) };
+    let animation: Animation;
+    try {
+      animation = this.flight.animate(keyframes, {
+        ...timing,
+        easing: this.str("easing-function", "ease-out"),
+      });
+    } catch {
+      // An easing the browser does not know
+      animation = this.flight.animate(keyframes, { ...timing, easing: "ease-out" });
+    }
+    this.animation = animation;
+    animation.onfinish = animation.oncancel = () => {
+      if (this.animation !== animation) return;
+      this.animation = undefined;
+      this.flight.hidePopover();
+      this.flight.removeAttribute("style");
+      this.hold.textContent = "";
+      other.hide(false);
+    };
+  }
+  private hide(hidden: boolean): void {
+    if (!this.animation) this.hold.textContent = hidden ? ":host { visibility: hidden; }" : "";
   }
 }
 
