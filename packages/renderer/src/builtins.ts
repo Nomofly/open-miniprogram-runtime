@@ -252,10 +252,21 @@ class WxSlider extends Builtin {
     </style><div class="row"><input type="range"><span class="value"></span></div>`);
     this.range = root.querySelector("input")!;
     this.label = root.querySelector(".value")!;
+    // `changing` is for drags: a tap on the track moves the value with `change` alone
+    let press: { x: number; moved: boolean } | undefined;
+    this.range.addEventListener("pointerdown", (event) => {
+      press = { x: event.clientX, moved: false };
+    });
+    this.range.addEventListener("pointermove", (event) => {
+      if (press && Math.abs(event.clientX - press.x) > 2) press.moved = true;
+    });
+    for (const type of ["pointerup", "pointercancel"]) {
+      this.range.addEventListener(type, () => (press = undefined));
+    }
     this.range.addEventListener("input", () => {
       this.label.textContent = this.range.value;
       this.fill();
-      emit(this, "changing", { value: Number(this.range.value) });
+      if (press?.moved) emit(this, "changing", { value: Number(this.range.value) });
     });
     this.range.addEventListener("change", () =>
       emit(this, "change", { value: Number(this.range.value) }),
