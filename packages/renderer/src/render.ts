@@ -203,6 +203,36 @@ const ASSET_ATTRIBUTES = new Set(["src", "poster"]);
 const CLASS_ATTRIBUTES = new Set(["class", "hover-class", "placeholder-class"]);
 /** Host attributes that the view uses; the other host attributes are only component properties. */
 const HOST_DOM_ATTRIBUTES = new Set(["id", "class", "style", "hidden", "slot"]);
+/**
+ * Components WeChat documents for the Skyline renderer. The compiler keeps
+ * their tags, since a project may name its own components so; when none is,
+ * they render as the simulator's built-ins of the same name.
+ */
+const SKYLINE_TAGS = new Set([
+  "list-view",
+  "grid-view",
+  "sticky-header",
+  "sticky-section",
+  "draggable-sheet",
+  "nested-scroll-header",
+  "nested-scroll-body",
+  "list-builder",
+  "grid-builder",
+  "open-container",
+  "snapshot",
+  "span",
+  "large-image",
+  "open-data-item",
+  "open-data-list",
+  "tap-gesture-handler",
+  "double-tap-gesture-handler",
+  "pan-gesture-handler",
+  "scale-gesture-handler",
+  "long-press-gesture-handler",
+  "force-press-gesture-handler",
+  "horizontal-drag-gesture-handler",
+  "vertical-drag-gesture-handler",
+]);
 
 function renderElement(
   node: ElementNode,
@@ -255,7 +285,7 @@ function renderElement(
   out.push({
     kind: "element",
     key,
-    tag: node.tag,
+    tag: !componentPath && SKYLINE_TAGS.has(node.tag) ? `wx-${node.tag}` : node.tag,
     attrs,
     events: node.events.map((event) => ({
       name: event.name,

@@ -23,7 +23,7 @@ function render(
   const page = {
     path: "pages/a/a",
     template: "pages/a/a.wxml",
-    usingComponents: { card: "components/card/card" },
+    usingComponents: { card: "components/card/card", "sticky-header": "components/sticky/sticky" },
     prefix: "",
   };
   const bundle = { route: "pages/a/a", page, components: {}, files, wxs: {}, css: "", window: {} };
@@ -45,6 +45,14 @@ const show = (nodes: VNode[]): string =>
     .join("");
 
 describe("renderScope", () => {
+  test("Skyline tags render as built-ins unless the page names a component so", () => {
+    const nodes = render(
+      `<grid-view><span>a</span></grid-view><sticky-header>b</sticky-header>`,
+      {},
+    );
+    expect(show(nodes)).toBe("<wx-grid-view><wx-span>a<sticky-header>b");
+  });
+
   test("wx:if chains, wx:for with item names and keys, and blocks", () => {
     const nodes = render(
       `<view wx:if="{{n > 1}}">many</view><view wx:elif="{{n === 1}}">one</view><view wx:else>none</view>

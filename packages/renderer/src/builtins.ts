@@ -18,6 +18,7 @@ import {
   WxPageMeta,
   WxRootPortal,
 } from "./components/containers.ts";
+import { SKYLINE_ONLY_TAGS, SkylineOnly, WxGridView } from "./components/skyline.ts";
 import { WxEditor } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
 import { WxMap } from "./components/map.ts";
@@ -561,6 +562,11 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-rich-text", WxRichText],
   ["wx-editor", WxEditor],
   ["wx-web-view", WxWebView],
+  ["wx-grid-view", WxGridView],
+  ...SKYLINE_ONLY_TAGS.map((tag): [string, CustomElementConstructor] => [
+    `wx-${tag}`,
+    class extends SkylineOnly {},
+  ]),
   ["wx-video", WxVideo],
   ["wx-audio", WxAudio],
   ["wx-camera", WxCamera],
@@ -599,8 +605,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neu
 [hidden] { display: none !important; }
 omr-slot { display: contents; }
 wx-view, wx-cover-view, wx-form, wx-navigator, wx-picker, wx-movable-area, wx-picker-view, wx-rich-text, wx-swiper-item, wx-share-element, wx-selection, wx-functional-page-navigator { display: block; }
-/* Skyline containers render their children as views in the WebView renderer */
-:where(list-view, grid-view, sticky-header, sticky-section):not([omr-host]) { display: block; }
+/* Skyline-only components render their children as plain containers; gesture handlers and span draw nothing of their own */
+wx-list-view, wx-sticky-header, wx-sticky-section, wx-draggable-sheet, wx-nested-scroll-header, wx-nested-scroll-body, wx-list-builder, wx-grid-builder, wx-open-container, wx-snapshot, wx-large-image, wx-open-data-item, wx-open-data-list { display: block; }
+wx-sticky-header { position: sticky; top: 0; z-index: 1; }
+:is(wx-tap-gesture-handler, wx-double-tap-gesture-handler, wx-pan-gesture-handler, wx-scale-gesture-handler, wx-long-press-gesture-handler, wx-force-press-gesture-handler, wx-horizontal-drag-gesture-handler, wx-vertical-drag-gesture-handler) { display: contents; }
 wx-page-meta, wx-keyboard-accessory, wx-editor-portal { display: none; }
 wx-cover-view { line-height: 1.2; white-space: nowrap; overflow: hidden; }
 wx-movable-area { position: relative; width: 10px; height: 10px; }
