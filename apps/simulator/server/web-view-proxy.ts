@@ -10,10 +10,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { WebViewBridgeConfig } from "../src/web-view-bridge.ts";
+import { webViewErrorPage } from "../src/web-view-error-page.ts";
 
 export interface WebViewProxies {
-  /** The port of the proxy for `origin`, started on first use; `userAgent` is what the page and its server see. */
-  open(origin: string, userAgent: string): Promise<number>;
+  /**
+   * The port of the proxy for `origin`, started on first use; `userAgent` is
+   * what the page and its server see. The proxy listens only on `address`, the
+   * local address the browser reached the simulator at.
+   */
+  open(origin: string, userAgent: string, address: string): Promise<number>;
   close(): void;
 }
 
@@ -47,9 +52,18 @@ const RESPONSE_DROPPED = new Set([
 export function createWebViewProxies(bridge: () => Promise<string>): WebViewProxies {
   const proxies = new Map<string, Promise<{ server: Server; port: number }>>();
   let userAgent = "";
+  /**
+   * The origins that set each cookie name. Browsers keep cookies by host, not
+   * port, so every proxy gets every cookie; each origin's server gets back only
+   * those it set, and those set by the page's scripts, as it would on its own.
+   */
+  const cookieOrigins = new Map<string, Set<string>>();
 
-  const open = (origin: string) => {
-    let proxy = proxies.get(origin);
+  const open = (origin: string, address: string) => {
+    // An IPv4 client of a dual-stack server
+    const host = address.replace(/^::ffff:(?=\d+\.)/, "");
+    const key = `${host} ${origin}`;
+    let proxy = proxies.get(key);
     if (!proxy) {
       const server = createServer((req, res) => {
         forward(origin, req, res).catch((error: unknown) => {
@@ -59,19 +73,22 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       });
       proxy = new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(0, () => resolve({ server, port: (server.address() as AddressInfo).port }));
+        server.listen(0, host, () =>
+          resolve({ server, port: (server.address() as AddressInfo).port }),
+        );
       });
-      proxies.set(origin, proxy);
-      proxy.catch(() => proxies.delete(origin));
+      proxies.set(key, proxy);
+      proxy.catch(() => proxies.delete(key));
     }
     return proxy.then(({ port }) => port);
   };
 
   /** The address of the proxy for a URL, at the host the browser reached this proxy by. */
   const proxied = async (url: URL, req: IncomingMessage) => {
+    // An IPv6 hostname keeps its brackets
     const host = new URL(`http://${req.headers.host ?? "localhost"}`).hostname;
-    const port = await open(url.origin);
-    return `http://${host.includes(":") ? `[${host}]` : host}:${port}${url.pathname}${url.search}${url.hash}`;
+    const port = await open(url.origin, req.socket.localAddress ?? "localhost");
+    return `http://${host}:${port}${url.pathname}${url.search}${url.hash}`;
   };
 
   const forward = async (origin: string, req: IncomingMessage, res: ServerResponse) => {
@@ -91,6 +108,13 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       if ((name === "origin" || name === "referer") && text.startsWith(self)) {
         text = origin + text.slice(self.length);
       }
+      if (name === "cookie") {
+        text = text
+          .split(/;\s*/)
+          .filter((pair) => cookieOrigins.get(cookieName(pair))?.has(origin) ?? true)
+          .join("; ");
+        if (!text) continue;
+      }
       headers[name] = text;
     }
     const method = req.method ?? "GET";
@@ -102,13 +126,12 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
     } catch (error) {
       if (!isDocument) throw error;
       const cause = (error as Error & { cause?: Error }).cause;
-      const page = errorPage(target, cause?.message ?? (error as Error).message);
+      const script = await bridgeScript({ origin, userAgent, error: errorOf(target) });
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
       });
-      const script = await bridgeScript({ origin, userAgent, error: errorOf(target) });
-      res.end(page.replace("<!--bridge-->", () => script));
+      res.end(webViewErrorPage(target.href, cause?.message ?? (error as Error).message, script));
       return;
     }
     const out: Record<string, string | string[]> = {};
@@ -116,7 +139,12 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       if (!RESPONSE_DROPPED.has(name)) out[name] = value;
     });
     // Cookies belong to the proxy's host now
-    const cookies = response.headers.getSetCookie().map(rewriteCookie);
+    const secure = isLoopback(new URL(self).hostname);
+    const cookies = response.headers.getSetCookie().map((cookie) => {
+      const name = cookieName(cookie);
+      cookieOrigins.set(name, (cookieOrigins.get(name) ?? new Set()).add(origin));
+      return rewriteCookie(cookie, secure);
+    });
     if (cookies.length > 0) out["set-cookie"] = cookies;
     const location = response.headers.get("location");
     if (location !== null) {
@@ -148,9 +176,9 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       );
 
   return {
-    open(origin, agent) {
+    open(origin, agent, address) {
       userAgent = agent;
-      return open(origin);
+      return open(origin, address);
     },
     close() {
       for (const proxy of proxies.values()) void proxy.then(({ server }) => server.close());
@@ -177,40 +205,30 @@ export function injectHtml(bytes: Buffer, script: string): Buffer {
   return Buffer.concat([bytes.subarray(0, at), Buffer.from(script, "latin1"), bytes.subarray(at)]);
 }
 
-/** Drops `Domain`, so a cookie the real site sets for its domain is kept for the proxy's host. */
-export function rewriteCookie(cookie: string): string {
+/** The name of a cookie, from a `Set-Cookie` value or a pair of a `Cookie` header. */
+const cookieName = (cookie: string) => cookie.split(/[=;]/, 1)[0]!.trim();
+
+/** Hosts whose plain http pages browsers trust with `Secure` cookies. */
+const isLoopback = (hostname: string) =>
+  hostname === "localhost" ||
+  hostname.endsWith(".localhost") ||
+  hostname === "[::1]" ||
+  /^127\.\d+\.\d+\.\d+$/.test(hostname);
+
+/**
+ * Drops `Domain`, so a cookie the real site sets for its domain is kept for
+ * the proxy's host. The proxy serves plain http, where browsers refuse
+ * `Secure` cookies except on loopback hosts: elsewhere, unless `secure`, the
+ * cookie loses `Secure`, and `SameSite=None`, which needs it, becomes `Lax`,
+ * which the proxy's frames still get, being on the simulator's site. Cookies
+ * named `__Secure-` or `__Host-` still need `Secure`.
+ */
+export function rewriteCookie(cookie: string, secure: boolean): string {
   return cookie
     .split(";")
-    .filter((part) => !/^\s*domain\s*=/i.test(part))
+    .filter((part) => !/^\s*domain\s*=/i.test(part) && (secure || !/^\s*secure\s*$/i.test(part)))
+    .map((part) => (secure ? part : part.replace(/^(\s*samesite\s*=\s*)none\s*$/i, "$1Lax")))
     .join(";");
-}
-
-const escapeHtml = (text: string) => text.replace(/[&<>"]/g, (char) => `&#${char.charCodeAt(0)};`);
-
-/** What the web-view shows when the page cannot be reached. */
-function errorPage(url: URL, reason: string): string {
-  return `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>无法打开网页</title>
-    <!--bridge-->
-    <style>
-      body { margin: 0; padding: 96px 32px 0; font: 15px/1.5 -apple-system, "PingFang SC", sans-serif; color: #111; text-align: center; background: #fff; }
-      .icon { width: 56px; height: 56px; margin: 0 auto 24px; border-radius: 50%; background: #fa5151; color: #fff; font: 600 32px/56px sans-serif; }
-      h1 { margin: 0 0 12px; font-size: 18px; font-weight: 500; }
-      p { margin: 0; color: rgba(0, 0, 0, 0.5); font-size: 13px; word-break: break-all; }
-    </style>
-  </head>
-  <body>
-    <div class="icon">!</div>
-    <h1>网页无法打开</h1>
-    <p>${escapeHtml(url.href)}</p>
-    <p>${escapeHtml(reason)}</p>
-  </body>
-</html>
-`;
 }
 
 function readBody(req: IncomingMessage): Promise<Buffer> {

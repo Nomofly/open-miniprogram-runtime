@@ -198,7 +198,11 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       if (!target || !/^https?:$/.test(target.protocol)) {
         sendJson(res, 400, { error: "invalid url" });
       } else {
-        const port = await webViewProxies.open(target.origin, url.searchParams.get("ua") ?? "");
+        const port = await webViewProxies.open(
+          target.origin,
+          url.searchParams.get("ua") ?? "",
+          req.socket.localAddress ?? "localhost",
+        );
         sendJson(res, 200, { port, path: `${target.pathname}${target.search}${target.hash}` });
       }
     } else if (pathname === "/__omr/region-streets") {

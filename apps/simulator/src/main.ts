@@ -18,6 +18,7 @@ import { DEFAULT_DEVICE, DEVICES, TAB_BAR_HEIGHT, menuButtonRect, systemInfo } f
 import { createUi } from "./ui.ts";
 import type { WebviewInit } from "./webview.ts";
 import type { BridgeToShell, ShellToBridge } from "./web-view-bridge.ts";
+import { webViewErrorPage } from "./web-view-error-page.ts";
 import "./style.css";
 
 interface TabBarConfig {
@@ -266,9 +267,11 @@ async function openWebView(page: PageView, src: string | undefined): Promise<voi
         path: string;
       };
       if (page.web?.frame === frame) frame.src = `http://${location.hostname}:${port}${path}`;
-    } catch {
-      // Not an http(s) URL: WeChat cannot open it either
+    } catch (error) {
+      // Not an http(s) URL: WeChat cannot open it either, and shows its error page over the page
       if (page.web?.frame === frame) {
+        frame.setAttribute("sandbox", "");
+        frame.srcdoc = webViewErrorPage(src, (error as Error).message);
         const url = src.replace(/[?#].*$/, "");
         toLogic({
           type: "webViewEvent",
