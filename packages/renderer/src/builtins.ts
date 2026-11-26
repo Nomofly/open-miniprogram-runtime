@@ -711,7 +711,7 @@ wx-text { white-space: pre-line; }
 wx-text[space] { white-space: pre-wrap; }
 wx-text[user-select], wx-text[selectable] { user-select: text; cursor: text; }
 wx-text[user-select] { display: inline-block; }
-wx-rich-text[user-select] { user-select: text; cursor: text; }
+wx-rich-text[user-select] { display: block; user-select: text; cursor: text; }
 wx-scroll-view { display: block; position: relative; overflow: hidden; -webkit-overflow-scrolling: touch; }
 wx-scroll-view[scroll-x] { overflow-x: auto; }
 wx-scroll-view[scroll-y] { overflow-y: auto; }
