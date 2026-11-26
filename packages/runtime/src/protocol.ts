@@ -96,6 +96,8 @@ export interface WxEvent {
   touches?: unknown[];
   changedTouches?: unknown[];
   mark?: Record<string, unknown>;
+  /** `<map>`'s `regionchange`: what moved the map; its `type` is then `begin` or `end`. */
+  causedBy?: string;
 }
 
 /** Event handlers a component's host binds in its owner's template, by event name. */

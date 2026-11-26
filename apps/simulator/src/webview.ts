@@ -21,6 +21,8 @@ export interface WebviewInit {
   dark: boolean;
   /** `ad` of omr.config.json, for `<ad>` and `<ad-custom>`. */
   ad?: AdConfig;
+  /** `location` of omr.config.json, where `<map>` puts the user. */
+  location?: { latitude: number; longitude: number };
 }
 
 type FromShell =
@@ -47,6 +49,7 @@ addEventListener("message", (event: MessageEvent<FromShell>) => {
       assetBase: "/__omr/files/",
       styleV2: data.styleV2,
       ad: data.ad,
+      location: data.location,
       post: (message) =>
         parent.postMessage({ omr: "view", webviewId: data.webviewId, message }, shell),
     });

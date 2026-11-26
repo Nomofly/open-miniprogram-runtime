@@ -254,6 +254,7 @@ function createPage(entry: StackEntry): PageView {
         styleV2,
         dark: darkmode && theme === "dark",
         ad: manifest.config.ad,
+        location: manifest.config.location,
       };
       // The view paints the window background behind pull-down refresh in this theme
       bundle.window = themeWindow(bundle.window, manifest.themeVariables, theme);

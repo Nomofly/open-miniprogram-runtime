@@ -22,6 +22,7 @@ import { createAnimations } from "./animation.ts";
 import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
 import { setAdConfig } from "./components/ad.ts";
+import { setMapLocation } from "./components/map.ts";
 import {
   convertRpx,
   renderScope,
@@ -42,6 +43,8 @@ export interface ViewOptions {
   styleV2: boolean;
   /** `ad` of the simulator config: whether `<ad>` and `<ad-custom>` fill or fail. */
   ad?: AdConfig;
+  /** `location` of the simulator config: where `<map>` puts the user. */
+  location?: { latitude: number; longitude: number };
   post: (message: ViewToLogic) => void;
 }
 
@@ -109,6 +112,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   const hairline = options.hairline ?? 1;
   defineBuiltins();
   setAdConfig(options.ad);
+  setMapLocation(options.location);
 
   const style = document.createElement("style");
   style.textContent = `${BASE_CSS}\n${PULL_DOWN_CSS}\n${HOST_CSS}\n${convertRpx(bundle.css, options.windowWidth, hairline)}`;
@@ -261,11 +265,14 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     const el = document.createElement(vnode.tag);
     vnode.el = el;
     states.set(el, { ownerId: vnode.ownerId, events: vnode.events, props: vnode.attrs });
-    // Built-ins that make their own nodes, such as rich-text, scope their classes like the template's
+    // Built-ins that make their own nodes, such as rich-text, scope their classes like the template's,
+    // and resolve paths in object attributes, such as a map marker's iconPath, like its paths
     const owner = scopes.get(vnode.ownerId);
     if (owner && vnode.tag.startsWith("wx-")) {
       (el as { omrTransformClass?: (value: string) => string }).omrTransformClass = (value) =>
         owner.transformClass(value);
+      (el as Partial<BuiltinElement>).omrResolveAsset = (src) =>
+        env.resolveAsset(src, owner.def.template);
     }
     applyAttrs(el, {}, vnode.attrs);
     mountContent(vnode);
@@ -591,7 +598,12 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     name: string,
     detail: Record<string, unknown>,
     bubbles: boolean,
-    extra: { touches?: unknown[]; changedTouches?: unknown[] } = {},
+    extra: {
+      touches?: unknown[];
+      changedTouches?: unknown[];
+      type?: string;
+      causedBy?: string;
+    } = {},
     replyId?: number,
   ): boolean => {
     const path: Element[] = [];
@@ -888,7 +900,12 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       return;
     }
     if (!isDisabled(target.closest("wx-button"))) {
-      dispatch(target, "tap", { x: event.pageX, y: event.pageY }, true, touchesOf(event, target));
+      // A component may tell where the tap was in its own terms, such as a map's coordinates
+      const detail = (target as Partial<BuiltinElement>).omrTapDetail?.(event) ?? {
+        x: event.pageX,
+        y: event.pageY,
+      };
+      dispatch(target, "tap", detail, true, touchesOf(event, target));
     }
     afterTap(target);
   });
@@ -898,7 +915,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     "omr-event",
     (event) => {
       const target = managed(event.target);
-      const { name, detail } = (event as CustomEvent<OmrEventDetail>).detail;
+      const { name, detail, fields = {} } = (event as CustomEvent<OmrEventDetail>).detail;
       if (!target) return;
       // A bindinput handler may return the field's new value, so the input waits for its answer
       const handled =
@@ -906,7 +923,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         /^WX-(INPUT|TEXTAREA)$/.test(target.tagName) &&
         states.get(target)?.events.some((binding) => binding.name === "input" && binding.handler);
       if (!handled) {
-        dispatch(target, name, detail, false);
+        dispatch(target, name, detail, false, fields);
         return;
       }
       const replyId = ++nextReplyId;

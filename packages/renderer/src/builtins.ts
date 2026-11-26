@@ -20,6 +20,7 @@ import {
 } from "./components/containers.ts";
 import { WxEditor } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
+import { WxMap } from "./components/map.ts";
 import { WxAudio, WxImage, WxVideo } from "./components/media.ts";
 import { WxMovableArea, WxMovableView } from "./components/movable.ts";
 import { WxPicker } from "./components/picker.ts";
@@ -518,7 +519,6 @@ class WxCoverView extends Builtin {
 
 /** Tags WeChat documents that the simulator shows only as placeholders. */
 const PLACEHOLDER_TAGS = [
-  "map",
   "live-player",
   "live-pusher",
   "voip-room",
@@ -568,6 +568,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-open-data", WxOpenData],
   ["wx-ad", WxAd],
   ["wx-ad-custom", WxAdCustom],
+  ["wx-map", WxMap],
   ...CANVAS_DEFINITIONS,
   ...PLACEHOLDER_TAGS.map((tag): [string, CustomElementConstructor] => [
     `wx-${tag}`,

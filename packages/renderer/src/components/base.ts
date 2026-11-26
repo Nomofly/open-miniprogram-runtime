@@ -20,16 +20,31 @@ export interface BuiltinElement extends HTMLElement {
     method: string,
     args: unknown[],
   ): Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
+  /** Resolves a package path the component reads from an object attribute, such as a marker's `iconPath`; the view sets it. */
+  omrResolveAsset?: (src: string) => string;
+  /** The detail of the `tap` the view raises for a click on the component, such as the coordinates on a `<map>`. */
+  omrTapDetail?(event: MouseEvent): Record<string, unknown>;
 }
 
 export interface OmrEventDetail {
   name: string;
   detail: Record<string, unknown>;
+  /** Fields of the event object beside `detail`, such as `<map>`'s `regionchange` `type` and `causedBy`. */
+  fields?: { type?: string; causedBy?: string };
 }
 
 /** Raises a WeChat event on a built-in component; the view sends it to the logic layer. It does not bubble. */
-export function emit(el: Element, name: string, detail: Record<string, unknown> = {}): void {
-  el.dispatchEvent(new CustomEvent<OmrEventDetail>("omr-event", { detail: { name, detail } }));
+export function emit(
+  el: Element,
+  name: string,
+  detail: Record<string, unknown> = {},
+  fields?: OmrEventDetail["fields"],
+): void {
+  el.dispatchEvent(
+    new CustomEvent<OmrEventDetail>("omr-event", {
+      detail: fields ? { name, detail, fields } : { name, detail },
+    }),
+  );
 }
 
 export const isV2 = () => document.documentElement.classList.contains("omr-v2");

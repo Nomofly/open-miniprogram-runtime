@@ -200,66 +200,136 @@ describe("CameraContext", () => {
 });
 
 describe("MapContext", () => {
-  test("getCenterLocation and getScale read the <map>'s attributes; moveToLocation moves the center", async () => {
+  test("methods reach the page's <map> by id and resolve with its answer, without a Promise", async () => {
     const { view, log, tap, toView } = boot({
       [PAGE]: {
         onReady: `this.map = wx.createMapContext("m");`,
-        center: `this.map.getCenterLocation({ success: push });`,
-        scale: `this.map.getScale({ success: push });`,
-        move: `this.map.moveToLocation({ latitude: 22.5, longitude: 114.05, success: push });`,
-        layer: `this.map.addCustomLayer({ layerId: "x", success: push });`,
+        center: `push(this.map.getCenterLocation({ success: push }));`,
+        move: `this.map.moveToLocation({ latitude: 22.5, longitude: 114.05, success: push, fail: push });`,
+        points: `this.map.includePoints({ points: [{ latitude: 1, longitude: 2 }], padding: [10, 10, 10, 10] });
+          this.map.addCustomLayer({ layerId: "x", success: push });`,
       },
     });
     await settle();
-    const answer = (found: Record<string, unknown>) => {
-      const query = toView("query").at(-1)!;
-      expect(query.requests[0]).toMatchObject({ selector: 'wx-map[id="m"]', scopeNodeId: 0 });
-      view(1, { type: "queryResult", queryId: query.queryId, results: [found] });
-    };
-    const map = { width: 300, height: 150, latitude: 31.2304, longitude: "121.4737" };
     tap("center");
     await settle();
-    answer(map);
+    const [center] = toView("callBuiltin");
+    expect(center).toMatchObject({
+      target: { tag: "map", id: "m", scopeNodeId: 0 },
+      method: "getCenterLocation",
+      args: [{}],
+    });
+    expect(log()).toEqual([undefined]);
+    view(1, {
+      type: "builtinResult",
+      callId: center!.callId,
+      result: { latitude: 31.2304, longitude: 121.4737 },
+    });
     await settle();
-    tap("scale");
-    await settle();
-    answer(map);
-    await settle();
+    expect(log().at(-1)).toEqual({
+      errMsg: "getCenterLocation:ok",
+      latitude: 31.2304,
+      longitude: 121.4737,
+    });
+
     tap("move");
     await settle();
-    answer(map);
+    const move = toView("callBuiltin").at(-1)!;
+    expect(move).toMatchObject({
+      method: "moveToLocation",
+      args: [{ latitude: 22.5, longitude: 114.05 }],
+    });
+    view(1, {
+      type: "builtinResult",
+      callId: move.callId,
+      error: "parameter error: latitude and longitude should be Number",
+    });
     await settle();
-    tap("center");
+    expect(log().at(-1)).toEqual({
+      errMsg: "moveToLocation:fail parameter error: latitude and longitude should be Number",
+    });
+
+    tap("points");
     await settle();
-    answer(map);
+    const [include, layer] = toView("callBuiltin").slice(-2);
+    expect(include).toMatchObject({
+      target: { tag: "map", id: "m" },
+      method: "includePoints",
+      args: [{ points: [{ latitude: 1, longitude: 2 }], padding: [10, 10, 10, 10] }],
+    });
+    expect(layer).toMatchObject({ method: "addCustomLayer", args: [{ layerId: "x" }] });
+    view(1, { type: "builtinResult", callId: layer!.callId, result: {} });
     await settle();
-    tap("layer");
-    await settle();
-    expect(log()).toEqual([
-      { errMsg: "getCenterLocation:ok", latitude: 31.2304, longitude: 121.4737 },
-      { errMsg: "getScale:ok", scale: 16 },
-      { errMsg: "moveToLocation:ok" },
-      { errMsg: "getCenterLocation:ok", latitude: 22.5, longitude: 114.05 },
-      { errMsg: "addCustomLayer:ok" },
-    ]);
+    expect(log().at(-1)).toEqual({ errMsg: "addCustomLayer:ok" });
   });
 
-  test("a <map> without latitude and longitude is centered on the configured location", async () => {
-    const { view, log, tap, toView } = boot(
-      { [PAGE]: { center: `wx.createMapContext("m").getCenterLocation({ success: push });` } },
-      { location: { latitude: 30.5, longitude: 104.06 } },
-    );
+  test("translateMarker calls animationEnd once the map answers that the marker arrived", async () => {
+    const { view, log, tap, toView } = boot({
+      [PAGE]: {
+        go: `wx.createMapContext("m").translateMarker({
+          markerId: 1,
+          destination: { latitude: 31, longitude: 121 },
+          autoRotate: false,
+          rotate: 0,
+          duration: 500,
+          animationEnd: () => push("animationEnd"),
+          success: push,
+        });`,
+      },
+    });
     await settle();
-    tap("center");
+    tap("go");
+    await settle();
+    const call = toView("callBuiltin").at(-1)!;
+    expect(call).toMatchObject({
+      target: { tag: "map", id: "m" },
+      method: "translateMarker",
+      args: [
+        {
+          markerId: 1,
+          destination: { latitude: 31, longitude: 121 },
+          autoRotate: false,
+          rotate: 0,
+          duration: 500,
+        },
+      ],
+    });
+    // The callbacks stay in the logic layer
+    expect(Object.keys(call.args[0] as object)).not.toContain("animationEnd");
+    await settle();
+    expect(log()).toEqual([]);
+    view(1, { type: "builtinResult", callId: call.callId, result: {} });
+    await settle();
+    expect(log()).toEqual(["animationEnd", { errMsg: "translateMarker:ok" }]);
+  });
+
+  test("a <map> found by NodesRef.context gives a MapContext in its owner's template", async () => {
+    const { view, log, tap, toView } = boot({
+      [PAGE]: {
+        query: `wx.createSelectorQuery().select("#m").context((res) => { this.map = res.context; }).exec();`,
+        scale: `this.map.getScale({ success: push }); this.map.on("markerClusterCreate", () => {});`,
+      },
+    });
+    await settle();
+    tap("query");
     await settle();
     const query = toView("query").at(-1)!;
     view(1, {
       type: "queryResult",
       queryId: query.queryId,
-      results: [{ width: 300, height: 150 }],
+      results: [{ context: { tag: "map", id: "m", scopeNodeId: 4 } }],
     });
     await settle();
-    expect(log()).toEqual([{ errMsg: "getCenterLocation:ok", latitude: 30.5, longitude: 104.06 }]);
+    tap("scale");
+    await settle();
+    const call = toView("callBuiltin").at(-1)!;
+    expect(call).toMatchObject({
+      target: { tag: "map", id: "m", scopeNodeId: 4 },
+      method: "getScale",
+    });
+    view(1, { type: "builtinResult", callId: call.callId, result: { scale: 16 } });
+    await settle();
+    expect(log()).toEqual([{ errMsg: "getScale:ok", scale: 16 }]);
   });
 });
 
