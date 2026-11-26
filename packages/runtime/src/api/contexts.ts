@@ -105,7 +105,7 @@ const LIVE_PUSHER_METHODS = [
 /**
  * EditorContext methods up to base library 3.5.0, and those of 3.7.11:
  * `insertCustomBlock`, `getSelection`, `setSelection`, `getBounds` and
- * `deleteText`; `<editor>` runs them.
+ * `deleteText`, and `getHistoryState` (3.9.3); `<editor>` runs them.
  */
 const EDITOR_METHODS = [
   "format",
@@ -126,6 +126,7 @@ const EDITOR_METHODS = [
   "setSelection",
   "getBounds",
   "deleteText",
+  "getHistoryState",
 ];
 
 /** MapContext methods up to base library 3.5.0; the simulated `<map>` runs them. */

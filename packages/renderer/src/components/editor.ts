@@ -225,6 +225,9 @@ export class WxEditor extends Builtin {
       case "deleteText":
         this.deleteText(requiredIndex(options), Number(options.length) || 0);
         return {};
+      case "getHistoryState":
+        // WeChat documents no result fields; these say whether undo and redo would change anything
+        return { canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0 };
       case "undo":
         this.undo();
         return {};

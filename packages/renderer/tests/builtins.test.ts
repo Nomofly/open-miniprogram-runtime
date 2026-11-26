@@ -310,4 +310,25 @@ describe("editor", () => {
     expect(call("getContents").text).toBe("a\n");
     expect(() => call("deleteText", {})).toThrow("parameter.index should be Number");
   });
+
+  test("getHistoryState follows the undo and redo stacks", async () => {
+    const editor = mount("wx-editor", {});
+    await settle();
+    const call = (method: string, options: Record<string, unknown> = {}) =>
+      editor.omrCall!(method, [options]) as Record<string, unknown>;
+    const state = () => call("getHistoryState");
+    expect(state()).toEqual({ canUndo: false, canRedo: false });
+    call("setContents", { html: "<p>a</p>" });
+    call("insertText", { text: "b" });
+    expect(state()).toEqual({ canUndo: true, canRedo: false });
+    call("undo");
+    expect(state()).toEqual({ canUndo: true, canRedo: true });
+    call("undo");
+    expect(state()).toEqual({ canUndo: false, canRedo: true });
+    call("redo");
+    expect(state()).toEqual({ canUndo: true, canRedo: true });
+    // A new edit drops what could be redone
+    call("insertText", { text: "c" });
+    expect(state()).toEqual({ canUndo: true, canRedo: false });
+  });
 });
