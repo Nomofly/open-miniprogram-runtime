@@ -183,6 +183,21 @@ backgroundScreen.append(
 );
 root.append(pagesLayer, backgroundScreen, statusBar, capsule, tabBarEl, uiLayer);
 
+/** Scroll views with `enable-back-to-top` on the page in front go back to the top. */
+function backToTop(): void {
+  const top = stack[stack.length - 1];
+  if (!backgroundScreen.hidden || !top) return;
+  pages
+    .get(top.webviewId)
+    ?.iframe.contentWindow?.postMessage({ omr: "logic", message: { type: "backToTop" } }, "*");
+}
+// iOS goes back to the top when the status bar is tapped; Android when the title is double-tapped
+if (device.platform === "ios") {
+  statusBar.classList.add("omr-statusbar-tappable");
+  statusBar.dataset.omrAction = "backToTop";
+  statusBar.addEventListener("click", backToTop);
+}
+
 const ui = createUi(uiLayer, resolveAsset, manifest.appName);
 const pages = new Map<number, PageView>();
 let stack: StackEntry[] = [];
@@ -290,6 +305,7 @@ function createPage(entry: StackEntry): PageView {
   home.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 11l8-7 8 7M6.5 9v10h11V9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   home.addEventListener("click", () => toLogic({ type: "reLaunch", url: `/${homeRoute}` }));
   const title = el("div", "omr-title");
+  if (device.platform === "android") title.addEventListener("dblclick", backToTop);
   const loading = el("span", "omr-nav-loading");
   loading.hidden = true;
   const heading = el("div", "omr-heading");

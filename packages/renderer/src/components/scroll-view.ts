@@ -3,6 +3,11 @@ import { Applied, Builtin, animate, emit, lengthOf, trackDrag } from "./base.ts"
 
 type RefresherState = "idle" | "pulling" | "refreshing" | "closing";
 
+/** How far a finger moves before a touch is a drag, in px. */
+const DRAG_SLOP = 5;
+/** Without `enable-back-to-top`, a scroll view at least this share of the window's height goes back to the top, as WeChat does since 2.27.3. */
+const BACK_TO_TOP_SHARE = 0.9;
+
 export class WxScrollView extends Builtin {
   private readonly applied = new Applied();
   private last = { top: 0, left: 0 };
@@ -14,7 +19,8 @@ export class WxScrollView extends Builtin {
   private stopAnimation = () => {};
   /** When the user triggered a refresh. */
   private refreshedAt = 0;
-  private enhancedDrag?: { x: number; y: number; t: number };
+  /** A finger down on an enhanced scroll view; `started` once it has moved, which is when WeChat's drag begins. */
+  private enhancedDrag?: { x: number; y: number; t: number; started: boolean };
   /**
    * What a ScrollViewContext set, over the attributes of the same name; a
    * later change of the attribute wins again.
@@ -69,19 +75,32 @@ export class WxScrollView extends Builtin {
         }
       },
     });
-    // With `enhanced`, the drag events report the scroll position
+    // With `enhanced`, the drag events report the scroll position. A tap is not a drag:
+    // dragstart waits until the finger has moved
     this.addEventListener("pointerdown", (event) => {
       if (!this.flag("enhanced")) return;
-      this.enhancedDrag = { x: event.clientX, y: event.clientY, t: event.timeStamp };
-      emit(this, "dragstart", this.position());
+      this.enhancedDrag = {
+        x: event.clientX,
+        y: event.clientY,
+        t: event.timeStamp,
+        started: false,
+      };
     });
-    this.addEventListener("pointermove", () => {
-      if (this.enhancedDrag) emit(this, "dragging", this.position());
+    this.addEventListener("pointermove", (event) => {
+      const drag = this.enhancedDrag;
+      if (!drag) return;
+      if (!drag.started) {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < DRAG_SLOP) return;
+        drag.started = true;
+        emit(this, "dragstart", this.position());
+        return;
+      }
+      emit(this, "dragging", this.position());
     });
     const dragEnd = (event: PointerEvent) => {
       const drag = this.enhancedDrag;
-      if (!drag) return;
       this.enhancedDrag = undefined;
+      if (!drag?.started) return;
       const time = Math.max(1, event.timeStamp - drag.t);
       emit(this, "dragend", {
         ...this.position(),
@@ -90,6 +109,21 @@ export class WxScrollView extends Builtin {
     };
     this.addEventListener("pointerup", dragEnd);
     this.addEventListener("pointercancel", dragEnd);
+  }
+
+  /**
+   * Tapping the status bar on iOS, or double-tapping the title on Android:
+   * a vertical scroll view with `enable-back-to-top` scrolls to the top, as
+   * one does without it unless it is set to false, when it fills most of the window.
+   */
+  omrBackToTop(): void {
+    if (!this.flag("scroll-y") || this.scrollTop <= 0) return;
+    const set = this.props["enable-back-to-top"];
+    const on =
+      set !== undefined
+        ? this.flag("enable-back-to-top")
+        : this.getBoundingClientRect().height >= window.innerHeight * BACK_TO_TOP_SHARE;
+    if (on) this.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   /** A ScrollViewContext setting: what the context set, else the attribute. */
@@ -161,10 +195,14 @@ export class WxScrollView extends Builtin {
       "overscroll-behavior",
       this.flag("enhanced") && !this.setting("bounces", "bounces", true) ? "none" : "",
     );
-    const scrollbar = this.overrides.showScrollbar;
+    // `show-scrollbar` (true by default) works with `enhanced`; other scroll views show none, as before
     this.style.setProperty(
       "scrollbar-width",
-      scrollbar === undefined ? "" : scrollbar ? "thin" : "none",
+      !this.flag("enhanced")
+        ? ""
+        : this.setting("showScrollbar", "show-scrollbar", true)
+          ? "thin"
+          : "none",
     );
   }
 

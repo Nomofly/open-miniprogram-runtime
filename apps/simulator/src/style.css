@@ -94,6 +94,10 @@ html[data-frame="0"] #omr-device {
   color: #000;
   pointer-events: none;
 }
+/* Tapping it scrolls back to the top, as on iOS */
+.omr-statusbar-tappable {
+  pointer-events: auto;
+}
 #omr-device.omr-chrome-dark .omr-statusbar {
   color: #fff;
 }

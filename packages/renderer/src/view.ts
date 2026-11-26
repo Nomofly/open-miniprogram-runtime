@@ -1284,6 +1284,11 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "background":
         pullDown.background(message);
         return;
+      case "backToTop":
+        for (const el of document.querySelectorAll("wx-scroll-view")) {
+          (el as { omrBackToTop?(): void }).omrBackToTop?.();
+        }
+        return;
       case "pageScrollTo":
         window.scrollTo({
           top: message.scrollTop,

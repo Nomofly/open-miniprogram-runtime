@@ -287,7 +287,9 @@ export type LogicToView =
   /** `wx.setBackgroundColor` and `wx.setBackgroundTextStyle`: the window behind the page. */
   | { type: "background"; color?: string; top?: string; bottom?: string; textStyle?: string }
   /** Work an app-level API needs done in the page, answered with `viewReply`. */
-  | { type: "viewRequest"; requestId: number; request: ViewRequest };
+  | { type: "viewRequest"; requestId: number; request: ViewRequest }
+  /** The user tapped the status bar (iOS) or double-tapped the title (Android): scroll views go back to the top. */
+  | { type: "backToTop" };
 
 /** What a `viewRequest` asks the view to do. */
 export type ViewRequest =

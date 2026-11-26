@@ -655,7 +655,6 @@ wx-rich-text[user-select] { user-select: text; cursor: text; }
 wx-scroll-view { display: block; position: relative; overflow: hidden; -webkit-overflow-scrolling: touch; }
 wx-scroll-view[scroll-x] { overflow-x: auto; }
 wx-scroll-view[scroll-y] { overflow-y: auto; }
-wx-scroll-view[enhanced][show-scrollbar] { scrollbar-width: thin; }
 wx-map, wx-canvas { width: 300px; height: 150px; }
 wx-live-player, wx-channel-video { width: 300px; height: 225px; }
 wx-live-pusher { width: 100%; }
