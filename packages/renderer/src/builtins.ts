@@ -29,6 +29,12 @@ import { WxMovableArea, WxMovableView } from "./components/movable.ts";
 import { WxPicker } from "./components/picker.ts";
 import { WxPickerView, WxPickerViewColumn } from "./components/picker-view.ts";
 import { WxScrollView } from "./components/scroll-view.ts";
+import {
+  WxStoreCoupon,
+  WxStoreGift,
+  WxStoreHome,
+  WxStoreProduct,
+} from "./components/store-cards.ts";
 import { WxSwiper, WxSwiperItem } from "./components/swiper.ts";
 import { WxText } from "./components/text.ts";
 import { applySpace } from "./components/format.ts";
@@ -648,13 +654,7 @@ class WxFunctionalPageNavigator extends Builtin {
 class WxWebView extends Builtin {}
 
 /** Tags WeChat documents that the simulator shows only as placeholders. */
-const PLACEHOLDER_TAGS = [
-  "official-account-publish",
-  "store-coupon",
-  "store-gift",
-  "store-home",
-  "store-product",
-];
+const PLACEHOLDER_TAGS = ["official-account-publish"];
 
 const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-text", WxText],
@@ -697,6 +697,10 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-live-pusher", WxLivePusher],
   ["wx-voip-room", WxVoipRoom],
   ["wx-functional-page-navigator", WxFunctionalPageNavigator],
+  ["wx-store-product", WxStoreProduct],
+  ["wx-store-home", WxStoreHome],
+  ["wx-store-coupon", WxStoreCoupon],
+  ["wx-store-gift", WxStoreGift],
   ["wx-page-container", WxPageContainer],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],
