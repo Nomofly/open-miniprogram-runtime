@@ -56,6 +56,7 @@ export const BUILTIN_TAGS = new Set([
   "store-gift",
   "store-home",
   "store-product",
+  "reward",
   "keyboard-accessory",
   "share-element",
   "selection",

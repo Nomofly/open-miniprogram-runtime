@@ -24,7 +24,13 @@ import { WxInput, WxTextarea } from "./components/input.ts";
 import { WxLivePlayer, WxLivePusher, WxVoipRoom } from "./components/live.ts";
 import { WxMap } from "./components/map.ts";
 import { WxAudio, WxImage, WxVideo } from "./components/media.ts";
-import { WxChannelLive, WxChannelVideo, WxOfficialAccount } from "./components/open-cards.ts";
+import {
+  WxChannelLive,
+  WxChannelVideo,
+  WxOfficialAccount,
+  WxOfficialAccountPublish,
+  WxReward,
+} from "./components/open-cards.ts";
 import { WxMovableArea, WxMovableView } from "./components/movable.ts";
 import { WxPicker } from "./components/picker.ts";
 import { WxPickerView, WxPickerViewColumn } from "./components/picker-view.ts";
@@ -578,19 +584,6 @@ class WxCamera extends Builtin {
   }
 }
 
-/** Native components and open abilities the simulator does not render; they keep their size and say what they are. */
-class Placeholder extends Builtin {
-  constructor() {
-    super();
-    const name = this.localName.slice(3);
-    this.shadow(`<style>
-      :host { display: inline-block; position: relative; }
-      .box { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 32px; padding: 8px; box-sizing: border-box; background: #f2f2f2; border: 1px dashed #c8c8c8; color: #999; font: 12px/1.4 sans-serif; text-align: center; overflow: hidden; }
-      .children { position: absolute; inset: 0; }
-    </style><div class="box">&lt;${name}&gt; is not rendered by the simulator</div><div class="children"><slot></slot></div>`);
-  }
-}
-
 const AVATAR =
   '<svg viewBox="0 0 40 40" width="100%" height="100%" preserveAspectRatio="xMidYMid slice"><rect width="40" height="40" fill="#e1e1e1"/><circle cx="20" cy="15" r="7" fill="#fff"/><path d="M6 40c1-9 7-13 14-13s13 4 14 13z" fill="#fff"/></svg>';
 
@@ -653,9 +646,6 @@ class WxFunctionalPageNavigator extends Builtin {
 /** `<web-view>` draws nothing in the page: the shell shows the web page over it. */
 class WxWebView extends Builtin {}
 
-/** Tags WeChat documents that the simulator shows only as placeholders. */
-const PLACEHOLDER_TAGS = ["official-account-publish"];
-
 const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-text", WxText],
   ["wx-image", WxImage],
@@ -701,6 +691,8 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-store-home", WxStoreHome],
   ["wx-store-coupon", WxStoreCoupon],
   ["wx-store-gift", WxStoreGift],
+  ["wx-official-account-publish", WxOfficialAccountPublish],
+  ["wx-reward", WxReward],
   ["wx-page-container", WxPageContainer],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],
@@ -710,10 +702,6 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-ad-custom", WxAdCustom],
   ["wx-map", WxMap],
   ...CANVAS_DEFINITIONS,
-  ...PLACEHOLDER_TAGS.map((tag): [string, CustomElementConstructor] => [
-    `wx-${tag}`,
-    class extends Placeholder {},
-  ]),
 ];
 
 export function defineBuiltins(): void {

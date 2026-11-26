@@ -1,9 +1,14 @@
 /**
  * Cards for open abilities WeChat draws itself: `<official-account>`,
- * `<channel-video>` and `<channel-live>`. The simulator has no account or
- * channel data, so they show what the attributes name.
+ * `<channel-video>`, `<channel-live>`, `<official-account-publish>` and
+ * `<reward>`. The simulator has no account or channel data, so they show what
+ * the attributes name.
  */
 import { Builtin, emit } from "./base.ts";
+import { warnNewer } from "./store-cards.ts";
+
+const AVATAR =
+  '<svg viewBox="0 0 40 40" width="100%" height="100%"><rect width="40" height="40" fill="#e1e1e1"/><circle cx="20" cy="15" r="7" fill="#fff"/><path d="M6 40c1-9 7-13 14-13s13 4 14 13z" fill="#fff"/></svg>';
 
 let nextAccountId = 0;
 
@@ -129,5 +134,137 @@ export class WxChannelLive extends Builtin {
   }
   protected override update(): void {
     this.feed.textContent = `${this.str("finder-user-name")} ${this.str("feed-id")}`.trim();
+  }
+}
+
+let posts = 0;
+
+/**
+ * `<official-account-publish>`, WeChat's sticker posts about the app (base
+ * library 3.9.3). The simulator has no posts to load: the list is empty
+ * (`empty`) and shows `placeholder`; posting adds the user's post and fires
+ * `publishsuccess` with a simulated `postUrl`.
+ */
+export class WxOfficialAccountPublish extends Builtin {
+  private readonly box: HTMLElement;
+  private readonly topic: HTMLElement;
+  private readonly empty: HTMLElement;
+  private readonly list: HTMLElement;
+  private readonly more: HTMLElement;
+  private count = 0;
+  private reported = false;
+  constructor() {
+    super();
+    const root = this.shadow(`<style>
+      :host { display: block; font: 14px/1.4 -apple-system, "PingFang SC", sans-serif; }
+      .box { padding: 12px; border-radius: 8px; }
+      .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+      .topic { color: #576b95; font-weight: 600; }
+      .publish { padding: 3px 12px; border-radius: 14px; background: #07c160; color: #fff; font-size: 13px; cursor: pointer; }
+      .empty { padding: 18px 0; text-align: center; color: rgba(0, 0, 0, 0.4); font-size: 13px; }
+      .list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+      .post { height: 90px; border-radius: 6px; background: linear-gradient(135deg, #d8efe2, #c3e4f0); display: flex; align-items: flex-end; padding: 6px; box-sizing: border-box; font-size: 12px; color: rgba(0, 0, 0, 0.6); }
+      .more { margin-top: 8px; text-align: center; color: #576b95; font-size: 13px; }
+      [hidden] { display: none !important; }
+    </style><div class="box"><div class="head"><span class="topic"></span><span class="publish">发表</span></div><div class="empty"></div><div class="list"></div><div class="more" hidden>查看更多</div></div>`);
+    this.box = root.querySelector(".box")!;
+    this.topic = root.querySelector(".topic")!;
+    this.empty = root.querySelector(".empty")!;
+    this.list = root.querySelector(".list")!;
+    this.more = root.querySelector(".more")!;
+    root.querySelector(".publish")!.addEventListener("click", () => this.publish());
+  }
+  connectedCallback(): void {
+    warnNewer("official-account-publish", "3.9.3");
+    if (this.reported) return;
+    this.reported = true;
+    setTimeout(() => emit(this, "empty", {}), 0);
+  }
+  protected override update(): void {
+    this.box.style.background = this.str("background-color", "#f7f7f7") || "#f7f7f7";
+    this.topic.textContent = `#${this.str("topic").slice(0, 20) || "小程序话题"}`;
+    this.empty.textContent = this.str("placeholder", "来写下第一条吧") || "来写下第一条吧";
+    this.render();
+  }
+  private publish(): void {
+    this.count++;
+    this.render();
+    emit(this, "publishsuccess", { postUrl: `https://example.com/omr-simulated-post/${++posts}` });
+  }
+  private render(): void {
+    const limit = Math.max(1, Math.floor(this.num("limit", 4)));
+    this.empty.hidden = this.count > 0;
+    this.list.replaceChildren(
+      ...Array.from({ length: Math.min(this.count, limit) }, (_, i) =>
+        Object.assign(document.createElement("div"), {
+          className: "post",
+          textContent: `我的贴图 ${this.count - i}`,
+        }),
+      ),
+    );
+    this.more.hidden = this.count <= limit;
+  }
+}
+
+const REWARD_THEMES: Record<string, [string, string]> = {
+  transparent: ["transparent", "rgba(0, 0, 0, 0.9)"],
+  plain: ["transparent", "rgba(0, 0, 0, 0.9)"],
+  white: ["#ffffff", "rgba(0, 0, 0, 0.9)"],
+  light: ["#ffffff", "rgba(0, 0, 0, 0.9)"],
+  black: ["#2c2c2c", "rgba(255, 255, 255, 0.9)"],
+  dark: ["#2c2c2c", "rgba(255, 255, 255, 0.9)"],
+};
+
+/**
+ * `<reward>`, "喜欢开发者" (base library 3.17.5): a button that likes the
+ * author, then the count and the avatars of those who did. The simulator has
+ * no likes until the user's. `width` is a share of the available width from
+ * 85 to 100; below 85, or with another `<reward>` on the page, none shows.
+ */
+export class WxReward extends Builtin {
+  private readonly card: HTMLElement;
+  private readonly button: HTMLElement;
+  private readonly likes: HTMLElement;
+  private liked = false;
+  constructor() {
+    super();
+    const root = this.shadow(`<style>
+      :host { display: block; font: 14px/1.4 -apple-system, "PingFang SC", sans-serif; }
+      .card { margin: 0 auto; padding: 16px; border-radius: 8px; box-sizing: border-box; text-align: center; }
+      .button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 22px; border-radius: 20px; background: #fa5151; color: #fff; cursor: pointer; }
+      .button.liked { background: rgba(250, 81, 81, 0.12); color: #fa5151; }
+      .likes { margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; opacity: 0.7; cursor: pointer; }
+      .avatar { width: 24px; height: 24px; border-radius: 4px; overflow: hidden; }
+      [hidden] { display: none !important; }
+    </style><div class="card"><span class="button">♥ 喜欢作者</span><div class="likes" hidden><span class="avatar">${AVATAR}</span><span>1 人喜欢</span></div></div>`);
+    this.card = root.querySelector(".card")!;
+    this.button = root.querySelector(".button")!;
+    this.likes = root.querySelector(".likes")!;
+    this.button.addEventListener("click", () => {
+      this.liked = !this.liked;
+      this.render();
+    });
+  }
+  connectedCallback(): void {
+    warnNewer("reward", "3.17.5");
+    // One per page: with more, none shows
+    queueMicrotask(() => {
+      const all = document.querySelectorAll("wx-reward");
+      for (const el of all) (el as WxReward).render(all.length > 1);
+    });
+  }
+  protected override update(): void {
+    this.render();
+  }
+  private render(duplicated = document.querySelectorAll("wx-reward").length > 1): void {
+    const [background, color] = REWARD_THEMES[this.str("theme")] ?? REWARD_THEMES.transparent!;
+    this.card.style.background = background;
+    this.card.style.color = color;
+    const width = this.props.width === undefined ? 96 : Math.min(100, this.num("width", 96));
+    this.card.style.width = `${width}%`;
+    this.hidden = duplicated || width < 85;
+    this.button.classList.toggle("liked", this.liked);
+    this.button.textContent = this.liked ? "♥ 已喜欢" : "♥ 喜欢作者";
+    this.likes.hidden = !this.liked;
   }
 }
