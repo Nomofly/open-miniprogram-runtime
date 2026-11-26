@@ -231,6 +231,8 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   const domOf = (vnode: VNode): Node => (vnode.kind === "text" ? vnode.node! : vnode.el!);
 
   const setAttribute = (el: HTMLElement, name: string, value: unknown) => {
+    // WeChat's `aria-role` is the standard `role`, which accessibility snapshots read
+    if (name === "aria-role") setAttribute(el, "role", value);
     if (value === undefined || value === null || value === false || typeof value === "object") {
       el.removeAttribute(name);
       return;
