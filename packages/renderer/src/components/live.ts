@@ -478,3 +478,79 @@ export class WxLivePusher extends LiveStream {
     }
   }
 }
+
+let nextVoipRoomId = 0;
+
+/**
+ * `<voip-room>`, a window of one member of the video room `wx.joinVoIPChat`
+ * joined: the user's simulated camera for `mode="camera"`, another member's
+ * simulated video for `mode="video"`. The logic layer answers what it shows;
+ * outside a video room, or for an openid not in it, it stays black and fires
+ * `error`.
+ */
+export class WxVoipRoom extends LiveStream {
+  readonly roomId = ++nextVoipRoomId;
+  private announced?: string;
+  constructor() {
+    super(`
+      .picture { position: absolute; inset: 0; }
+      .mirror .picture { transform: scaleX(-1); }
+      .contain .picture { inset: 12% 0; }
+      .video .picture { background-image: linear-gradient(140deg, #5a4a3a, #3d6a5a, #4a4f73, #5a4a3a); }
+    `);
+  }
+  connectedCallback(): void {
+    this.announce();
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.announced = undefined;
+    document.dispatchEvent(
+      new CustomEvent("omr-voip-room", { detail: { room: this, mounted: false } }),
+    );
+  }
+  protected override update(): void {
+    const camera = this.mode() === "camera";
+    const position = this.str("device-position", "front");
+    this.screen.classList.toggle("mirror", camera && position !== "back");
+    this.screen.classList.toggle("contain", this.str("object-fit") === "contain");
+    this.screen.classList.toggle("video", !camera);
+    this.label.textContent = camera
+      ? `模拟通话画面 · 我 · ${position === "back" ? "后置" : "前置"}`
+      : `模拟通话画面 · ${this.str("openid")}`;
+    this.announce();
+  }
+  private mode(): string {
+    return this.str("mode", "camera") === "video" ? "video" : "camera";
+  }
+  /** Asks the logic layer what to show when inserted, and again when `openid` or `mode` changes. */
+  private announce(): void {
+    if (!this.isConnected) return;
+    const openid = this.str("openid");
+    const mode = this.mode();
+    if (this.announced === `${mode} ${openid}`) return;
+    this.announced = `${mode} ${openid}`;
+    document.dispatchEvent(
+      new CustomEvent("omr-voip-room", { detail: { room: this, mounted: true, openid, mode } }),
+    );
+  }
+  omrVoipRoomState(state: {
+    visible?: boolean;
+    muted?: boolean;
+    error?: string;
+    fire?: boolean;
+  }): void {
+    if (state.error !== undefined) {
+      this.picture.hidden = true;
+      this.badge.hidden = true;
+      this.setNote("无法显示通话画面");
+      if (state.fire) emit(this, "error", { errMsg: state.error });
+      return;
+    }
+    this.picture.hidden = !state.visible;
+    this.badge.hidden = !state.muted;
+    this.badge.textContent = "已静音";
+    this.setNote(state.visible ? "" : "未订阅该成员画面");
+  }
+  omrPageVisibility(): void {}
+}

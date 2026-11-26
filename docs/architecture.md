@@ -83,6 +83,7 @@ Each page's view layer runs in a sandboxed iframe with an opaque origin, so page
 - Accessibility: `aria-*` attributes pass through to the elements, and `aria-role` also sets the standard `role`, so a `<view aria-role="button" aria-label="提交">` is a button named 提交 in accessibility snapshots.
 - `<input>` and `<textarea>` `cursor-color` colors the caret; `green` is WeChat green (`#07c160`) and `default` keeps the system color.
 - `<live-player>` and `<live-pusher>` draw a moving picture instead of a stream. `<live-player>` plays an RTMP or FLV `src` (codes 2001, 2002, 2008, 2026, 2003, 2004; any other address -2302), and `<live-pusher>` asks for `scope.camera` and `scope.record` when inserted (a refusal is `error` 10001 or 10002), previews (1003) and pushes to an RTMP `url` (1001, 1002, 2027, 1008). Both fire `netstatus` every second while they run, their contexts drive them, and the background suspends them (6000 and 5000) until the app comes back.
+- `wx.joinVoIPChat` joins a simulated room (privacy agreement, `scope.record`, and `scope.camera` for a video room) with the user and `config.voip.members`; the others take turns in `onVoIPChatSpeakersChanged`, a second join fails with `errCode` -1, and going to the background ends it through `onVoIPChatInterrupted` (-1). `<voip-room>` shows the user's simulated camera (`mode="camera"`) or a member's video (`mode="video"`) while in a video room; without subscribing it shows only the first two members, `subscribeVoIPVideoMembers` picks others, and outside a room or for an openid not in it, it stays black and an inserted window fires `error`.
 - `<slider>` draws its own 2px track and round block (`activeColor`, `backgroundColor`, `block-size` 12 to 28, `block-color`, and the older `selected-color` and `color`). `changing` fires only while the block is dragged; a tap on the track moves the value with `change` alone, as on WeChat.
 - `<camera>` shows a generated preview once it has `scope.camera`, mirrored for `device-position="front"` and brighter for `flash="torch"`. With `mode="scanCode"` (read when it is inserted), tapping the preview is the camera seeing the code that `wx.scanCode` reads (`config.scanCode`), and fires `scancode` with `type`, `result`, `charSet` and `rawData`. Going to the background fires `stop`, and coming back shows the preview again. `onCameraFrame` frames are 144×192, 240×320 or 480×640 for `frame-size` small, medium and large.
 - A long press (350 ms) on an `<image show-menu-by-longpress>` opens WeChat's image menu (发送给朋友, 收藏, 保存图片, 搜一搜) after `longpress`, and no tap follows; the items only show WeChat's toasts, the Mini Program hears nothing of them, and codes in the image are not recognized. `binderror` reports `GET <src> 404 (Not Found)` whatever the server answered, as WeChat does.
@@ -109,6 +110,7 @@ APIs that show system UI on a phone (payment, subscribe messages, scanning, choo
 | `extConfig`                           | `wx.getExtConfigSync()`                                                                              | `{}`                                 |
 | `media.images`, `media.audioDuration` | project images `wx.chooseImage` returns; the length of simulated audio in seconds                    | generated PNGs; 10                   |
 | `ad.result`, `ad.errCode`             | `fill` shows a mock `<ad>`/`<ad-custom>` and fires `load`; `error` takes no height and fires `error` | `fill`; 1004                         |
+| `voip.members`                        | the openids already in every room `wx.joinVoIPChat` joins                                            | one simulated member                 |
 
 Chosen images are written to the file system as temporary files. Audio plays silently with the documented events and timing.
 
@@ -157,7 +159,7 @@ Agents compare screenshots to judge their changes, so rendering must be stable:
 
 - WeChat's **observable behavior** is the reference. Implement independently from public documentation; never use proprietary code or assets from the WeChat base library or DevTools.
 - Cover the rendering paths agents hit most first: WXML template syntax, WXSS, common built-in components, page lifecycles and routing, and `setData`.
-- Native components (`voip-room` and so on; `map` without map data) and capabilities that depend on Tencent services (login, payment, cloud development) are provided as placeholder rendering and configurable mocks, without aiming for real behavior.
+- Native components (`map` without map data and the like) and capabilities that depend on Tencent services (login, payment, cloud development) are provided as placeholder rendering and configurable mocks, without aiming for real behavior.
 
 ## Non-goals
 

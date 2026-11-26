@@ -23,6 +23,13 @@ export interface BuiltinElement extends HTMLElement {
   }): void;
   /** Tells a `<live-pusher>` whether the user allowed the camera and the microphone. */
   omrLivePusherState?(state: { errCode?: number; errMsg?: string }): void;
+  /** Tells a `<voip-room>` what it shows: its member's video, or the error while it cannot. */
+  omrVoipRoomState?(state: {
+    visible?: boolean;
+    muted?: boolean;
+    error?: string;
+    fire?: boolean;
+  }): void;
   /** The page was hidden or shown; `background` when the app went to or came back from the background. */
   omrPageVisibility?(visible: boolean, background: boolean): void;
   /** A method of the component's context, such as `play` of `VideoContext`; throws the fail reason. */

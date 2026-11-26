@@ -19,7 +19,7 @@ import type { ApiContext } from "./context.ts";
 export function requireParam(
   options: Options,
   name: string,
-  type: "String" | "Number" | "Array" | "Object",
+  type: "String" | "Number" | "Boolean" | "Array" | "Object",
 ) {
   const actual = Object.prototype.toString.call(options[name]).slice(8, -1);
   if (actual !== type) {
@@ -61,7 +61,7 @@ export function scannedCode(ctx: ApiContext) {
 }
 
 /** Renames the `errno` of a failure to the `errCode` some open APIs document instead. */
-const withErrCode =
+export const withErrCode =
   (api: (options: Options) => unknown) =>
   (options: Options = {}) => {
     const rename = (result: Record<string, unknown>) => {

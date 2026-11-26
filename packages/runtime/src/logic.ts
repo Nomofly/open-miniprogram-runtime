@@ -1540,6 +1540,15 @@ export function startLogic(
       case "livePusher":
         void wxApi!.livePusherMounted(record.webviewId, message.pusherId, message.mounted);
         break;
+      case "voipRoom":
+        wxApi!.voipRoomMounted(
+          record.webviewId,
+          message.roomId,
+          message.mounted,
+          message.openid,
+          message.mode,
+        );
+        break;
       case "animationDone":
         wxApi!.animationDone(record.webviewId, message.animationId);
         break;
@@ -1852,6 +1861,7 @@ export function startLogic(
     callHook(app, "onHide");
     wxApi.app.emit("AppHide", {});
     wxApi.stopCameras(true);
+    wxApi.interruptVoip();
   };
   const appShow = (scene = 1001) => {
     if (!wxApi || !inBackground) return;

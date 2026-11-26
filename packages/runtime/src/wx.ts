@@ -18,6 +18,7 @@ import { createFileApis, createTempFiles } from "./api/files.ts";
 import { createInterfaceApis } from "./api/interface.ts";
 import { createMediaApis } from "./api/media.ts";
 import { createContextApis } from "./api/contexts.ts";
+import { createVoipApis } from "./api/voip.ts";
 import { createAnimationApis } from "./api/animation.ts";
 import { createNetworkApis } from "./api/network.ts";
 import { createAppApis } from "./api/app.ts";
@@ -670,6 +671,12 @@ export function createWx(host: WxHost) {
       release?.();
       cameras.delete(key);
     }
+    for (const [key, { release }] of pushers) {
+      if (!key.startsWith(`${webviewId}:`)) continue;
+      release?.();
+      pushers.delete(key);
+    }
+    voipApis.releasePage(webviewId);
     observerApis.releasePage(webviewId);
     animationApis.releasePage(webviewId);
   };
@@ -1077,6 +1084,7 @@ export function createWx(host: WxHost) {
   const appApis = createAppApis(ctx);
   const observerApis = createObserverApis(ctx);
   const contextApis = createContextApis(ctx);
+  const voipApis = createVoipApis(ctx, user.openid);
   Object.assign(
     wx,
     appApis.apis,
@@ -1087,6 +1095,7 @@ export function createWx(host: WxHost) {
     createDeviceApis(ctx),
     createMediaApis(ctx),
     contextApis.apis,
+    voipApis.apis,
     animationApis.apis,
     observerApis.apis,
   );
@@ -1115,6 +1124,8 @@ export function createWx(host: WxHost) {
     cameraMounted,
     stopCameras,
     livePusherMounted,
+    voipRoomMounted: voipApis.voipRoomMounted,
+    interruptVoip: voipApis.interrupt,
     officialAccountState,
     observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
       observerApis.receive(...args),

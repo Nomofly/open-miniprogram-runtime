@@ -1046,6 +1046,22 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     post({ type: "livePusher", pusherId: pusher.pusherId, mounted });
   });
 
+  // <voip-room> asks the logic layer which member of the video room it shows
+  const voipRooms = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-voip-room", (event) => {
+    const { room, mounted, openid, mode } = (
+      event as CustomEvent<{
+        room: BuiltinElement & { roomId: number };
+        mounted: boolean;
+        openid?: string;
+        mode?: string;
+      }>
+    ).detail;
+    if (mounted) voipRooms.set(room.roomId, room);
+    else voipRooms.delete(room.roomId);
+    post({ type: "voipRoom", roomId: room.roomId, mounted, openid, mode });
+  });
+
   // <official-account> asks the logic layer whether the launch scene lets it show
   const officialAccounts = new Map<number, BuiltinElement>();
   document.addEventListener("omr-official-account", (event) => {
@@ -1373,6 +1389,9 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         return;
       case "livePusherState":
         pushers.get(message.pusherId)?.omrLivePusherState?.(message);
+        return;
+      case "voipRoomState":
+        voipRooms.get(message.roomId)?.omrVoipRoomState?.(message);
         return;
       case "animate":
       case "clearAnimation": {

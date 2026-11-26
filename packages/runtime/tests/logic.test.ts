@@ -941,6 +941,85 @@ describe("logic layer", () => {
     expect(inUse).toEqual([["camera"], ["camera", "record"], ["record"], []]);
   });
 
+  test("joinVoIPChat joins a video room once, voip-room windows follow it, and the background interrupts it", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `
+          const push = (r) => getApp().log.push(r);
+          wx.onVoIPChatInterrupted(push);
+          wx.onVoIPVideoMembersChanged((r) => push(r.openIdList));
+          const room = { signature: "s", nonceStr: "n", timeStamp: 1, groupId: "g", roomType: "video" };
+          Page({
+            join() { wx.joinVoIPChat({ ...room, success: push, fail: push }); },
+            joinAgain() { wx.joinVoIPChat({ ...room, fail: push }); },
+            subscribe() { wx.subscribeVoIPVideoMembers({ openIdList: ["c"] }); },
+          });`,
+      },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": true },
+          user: { openid: "me" },
+        },
+        voip: { members: ["b", "c"] },
+      },
+    );
+    const call = (handler: string) =>
+      view(1, { type: "event", ownerId: 0, handler, event: tapOn("") });
+    view(1, { type: "ready" });
+    view(1, { type: "voipRoom", roomId: 1, mounted: true, openid: "me", mode: "camera" });
+    view(1, { type: "voipRoom", roomId: 2, mounted: true, openid: "c", mode: "video" });
+    const states = () => toView(sent, "voipRoomState");
+    // Before joining, both windows fail once
+    expect(states()).toMatchObject([
+      { roomId: 1, error: "insertVoIPRoom:fail not in a VoIP chat", fire: true },
+      { roomId: 2, error: "insertVoIPRoom:fail not in a VoIP chat", fire: true },
+    ]);
+
+    call("join");
+    for (let i = 0; i < 6; i++) await settle();
+    call("joinAgain");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 3; i++) await settle();
+    expect(log()).toEqual([
+      { openIdList: ["me", "b", "c"], errCode: 0, errMsg: "joinVoIPChat:ok" },
+      ["me", "b", "c"],
+      { errMsg: "joinVoIPChat:fail 当前已在房间内", errCode: -1 },
+    ]);
+    // Only the first two members show without subscribing
+    expect(states().slice(2)).toEqual([
+      { type: "voipRoomState", roomId: 1, visible: true, muted: false },
+      { type: "voipRoomState", roomId: 2, visible: false, muted: false },
+    ]);
+    call("subscribe");
+    for (let i = 0; i < 3; i++) await settle();
+    expect(states().at(-1)).toEqual({
+      type: "voipRoomState",
+      roomId: 2,
+      visible: true,
+      muted: false,
+    });
+
+    handle({ type: "appHide" });
+    expect(log().at(-1)).toEqual({
+      errCode: -1,
+      errMsg: "onVoIPChatInterrupted:fail 由于退后台，导致会话中断",
+    });
+    // Leaving the room turns the windows black again; only a window that fails when inserted fires error
+    expect(states().at(-1)).toEqual({
+      type: "voipRoomState",
+      roomId: 2,
+      error: "insertVoIPRoom:fail not in a VoIP chat",
+      fire: false,
+    });
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["record"], ["camera", "record"], ["camera"], []]);
+  });
+
   test("a camera moved while it waits for consent shows in the capsule once", async () => {
     const { sent, handle, view } = boot(
       { "app.js": APP, "pages/index/index.js": `Page({});` },

@@ -21,7 +21,7 @@ import {
 import { SKYLINE_ONLY_TAGS, SkylineOnly, WxGridView } from "./components/skyline.ts";
 import { WxEditor } from "./components/editor.ts";
 import { WxInput, WxTextarea } from "./components/input.ts";
-import { WxLivePlayer, WxLivePusher } from "./components/live.ts";
+import { WxLivePlayer, WxLivePusher, WxVoipRoom } from "./components/live.ts";
 import { WxMap } from "./components/map.ts";
 import { WxAudio, WxImage, WxVideo } from "./components/media.ts";
 import { WxChannelLive, WxChannelVideo, WxOfficialAccount } from "./components/open-cards.ts";
@@ -621,7 +621,6 @@ class WxWebView extends Builtin {}
 
 /** Tags WeChat documents that the simulator shows only as placeholders. */
 const PLACEHOLDER_TAGS = [
-  "voip-room",
   "official-account-publish",
   "store-coupon",
   "store-gift",
@@ -668,6 +667,7 @@ const DEFINITIONS: [string, CustomElementConstructor][] = [
   ["wx-camera", WxCamera],
   ["wx-live-player", WxLivePlayer],
   ["wx-live-pusher", WxLivePusher],
+  ["wx-voip-room", WxVoipRoom],
   ["wx-page-container", WxPageContainer],
   ["wx-root-portal", WxRootPortal],
   ["wx-match-media", WxMatchMedia],
@@ -719,7 +719,7 @@ wx-scroll-view { display: block; position: relative; overflow: hidden; -webkit-o
 wx-scroll-view[scroll-x] { overflow-x: auto; }
 wx-scroll-view[scroll-y] { overflow-y: auto; }
 wx-map, wx-canvas { width: 300px; height: 150px; }
-wx-live-player, wx-channel-video { width: 300px; height: 225px; }
+wx-live-player, wx-voip-room, wx-channel-video { width: 300px; height: 225px; }
 wx-live-pusher { width: 100%; }
 wx-ad, wx-ad-custom, wx-official-account-publish, wx-store-product, wx-store-home, wx-store-coupon, wx-store-gift { display: block; }
 wx-web-view { position: fixed !important; inset: 0; width: 100%; height: 100%; z-index: 100; }

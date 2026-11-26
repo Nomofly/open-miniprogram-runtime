@@ -44,6 +44,8 @@ export interface SimulatorConfig {
    * it fail to load even then.
    */
   officialAccount?: { name?: string; status?: number };
+  /** The openids already in every room `wx.joinVoIPChat` joins; default one simulated member. */
+  voip?: { members?: string[] };
 }
 
 export interface AdConfig {
@@ -185,6 +187,8 @@ export type ViewToLogic =
   | { type: "camera"; cameraId: number; mounted: boolean; mode?: string; frameSize?: string }
   /** A `<live-pusher>` was inserted into or removed from the page; it needs the camera and the microphone. */
   | { type: "livePusher"; pusherId: number; mounted: boolean }
+  /** A `<voip-room>` was inserted, changed its `openid` or `mode`, or was removed. */
+  | { type: "voipRoom"; roomId: number; mounted: boolean; openid?: string; mode?: string }
   | {
       type: "attach";
       nodeId: number;
@@ -285,6 +289,18 @@ export type LogicToView =
     }
   /** Whether a `<live-pusher>` may use the camera and the microphone; `errCode` 10001 or 10002 names the refusal. */
   | { type: "livePusherState"; pusherId: number; errCode?: number; errMsg?: string }
+  /**
+   * What a `<voip-room>` shows: its member's video when `visible`, with the user's microphone `muted`,
+   * or `error` while it cannot; `fire` when the error is new and fires `binderror`.
+   */
+  | {
+      type: "voipRoomState";
+      roomId: number;
+      visible?: boolean;
+      muted?: boolean;
+      error?: string;
+      fire?: boolean;
+    }
   /** Whether an `<official-account>` shows (`status` 0) or fails, with the `load` or `error` detail and the account's name. */
   | {
       type: "officialAccountState";
