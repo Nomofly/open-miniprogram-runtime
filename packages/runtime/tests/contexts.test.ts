@@ -333,6 +333,29 @@ describe("MapContext", () => {
   });
 });
 
+describe("AudioContext", () => {
+  test("methods reach the <audio> by id with their arguments and return nothing", async () => {
+    const { tap, toView, log } = boot({
+      [PAGE]: {
+        run: `
+          const audio = wx.createAudioContext("song");
+          push(audio.setSrc("/assets/a.mp3"));
+          audio.seek(14);
+          audio.play();`,
+      },
+    });
+    await settle();
+    tap("run");
+    await settle();
+    expect(log()).toEqual([undefined]);
+    expect(toView("callBuiltin")).toMatchObject([
+      { target: { tag: "audio", id: "song" }, method: "setSrc", args: ["/assets/a.mp3"] },
+      { target: { tag: "audio", id: "song" }, method: "seek", args: [14] },
+      { target: { tag: "audio", id: "song" }, method: "play", args: [] },
+    ]);
+  });
+});
+
 describe("live contexts", () => {
   test("methods reach the <live-player> by id and the page's <live-pusher>, and snapshot returns a generated image", async () => {
     const { log, tap, view, toView } = boot({

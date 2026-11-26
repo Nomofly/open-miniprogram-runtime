@@ -678,8 +678,13 @@ const formatTime = (seconds: number) => {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 };
 
-/** The legacy `<audio>`: with `controls`, a card with the poster, name, author and time. */
+/**
+ * The legacy `<audio>`: with `controls`, a card with the poster, name, author
+ * and time. `wx.createAudioContext` drives it through `omrCall`.
+ */
 export class WxAudio extends Builtin {
+  /** Resolves `AudioContext.setSrc` as the template's `src`; the view sets it. */
+  omrResolveAsset = (src: string) => src;
   private readonly audio: HTMLAudioElement;
   private readonly card: HTMLElement;
   private readonly poster: HTMLElement;
@@ -749,5 +754,27 @@ export class WxAudio extends Builtin {
     // Labels as WeChat shows them
     this.name.textContent = this.str("name", "未知音频") || "未知音频";
     this.author.textContent = this.str("author", "未知作者") || "未知作者";
+  }
+  /** AudioContext: `setSrc` replaces the source until the template changes `src` again. */
+  omrCall(method: string, args: unknown[]): void {
+    switch (method) {
+      case "setSrc": {
+        const src = typeof args[0] === "string" ? this.omrResolveAsset(args[0]) : "";
+        if (src) this.audio.setAttribute("src", src);
+        else this.audio.removeAttribute("src");
+        break;
+      }
+      case "play":
+        if (this.audio.getAttribute("src")) void this.audio.play().catch(() => {});
+        break;
+      case "pause":
+        this.audio.pause();
+        break;
+      case "seek": {
+        const position = Number(args[0]);
+        if (Number.isFinite(position)) this.audio.currentTime = Math.max(0, position);
+        break;
+      }
+    }
   }
 }

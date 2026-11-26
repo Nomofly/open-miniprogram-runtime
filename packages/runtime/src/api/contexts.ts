@@ -1,8 +1,8 @@
 /**
- * Contexts of native components: `wx.createVideoContext`, `wx.createMapContext`,
- * `wx.createCameraContext`, `wx.createLivePlayerContext` and
- * `wx.createLivePusherContext`, and the contexts `NodesRef.context` gives,
- * such as `EditorContext`.
+ * Contexts of native components: `wx.createVideoContext`,
+ * `wx.createAudioContext`, `wx.createMapContext`, `wx.createCameraContext`,
+ * `wx.createLivePlayerContext` and `wx.createLivePusherContext`, and the
+ * contexts `NodesRef.context` gives, such as `EditorContext`.
  *
  * `VideoContext` and `MapContext` drive the `<video>` and the simulated
  * `<map>` in the page, which fire their own events, as do the contexts of
@@ -52,6 +52,9 @@ const VIDEO_METHODS = [
   "reconnectCasting",
   "exitCasting",
 ];
+
+/** AudioContext drives the legacy `<audio>`. */
+const AUDIO_METHODS = ["setSrc", "play", "pause", "seek"];
 
 const LIVE_PLAYER_METHODS = [
   "play",
@@ -232,6 +235,23 @@ export function createContextApis(ctx: ApiContext) {
     builtinContext("VideoContext", "video", VIDEO_METHODS, String(id), scope);
   const createVideoContext = (id: string, component?: object) =>
     videoContext(id, scopeFor(component));
+
+  // wx.createAudioContext: each method calls the <audio> in the view; none takes callbacks
+  const createAudioContext = (id: string, component?: object) => {
+    const methods = builtinContext(
+      "AudioContext",
+      "audio",
+      AUDIO_METHODS,
+      String(id),
+      scopeFor(component),
+    );
+    return Object.fromEntries(
+      AUDIO_METHODS.map((method) => [
+        method,
+        (...args: unknown[]) => void methods[method]!(...args),
+      ]),
+    );
+  };
 
   // wx.createMapContext: each method calls the <map> in the view, which moves and fires its events
   const mapContext = (mapId: string, scope: Scope) => ({
@@ -448,6 +468,7 @@ export function createContextApis(ctx: ApiContext) {
     scrollViewContext,
     apis: {
       createVideoContext,
+      createAudioContext,
       createMapContext: (mapId: string, component?: object) =>
         mapContext(mapId, scopeFor(component)),
       createCameraContext,
