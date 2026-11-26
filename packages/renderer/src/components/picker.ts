@@ -337,14 +337,31 @@ export class WxPicker extends Builtin {
   private regionModel(): Model {
     const depth = regionDepth(this.str("level", "region"));
     const custom = this.str("custom-item");
-    let state = regionColumns(regionPathOf(this.value, depth, custom), depth, custom);
+    // Streets load when a district needs them; the open sheet then shows them
+    const loaded = () => {
+      if (this.model !== model) return;
+      const path = initial ? regionPathOf(this.value, depth, custom) : state.path;
+      state = regionColumns(path, depth, custom, loaded);
+      model.columns = state.columns;
+      model.selected = state.path;
+      this.sheet?.show(model.columns, model.selected);
+    };
+    // Until the user moves a column, the value's street is looked for once its district's streets arrive
+    let initial = true;
+    let state = regionColumns(
+      regionPathOf(this.value, depth, custom, loaded),
+      depth,
+      custom,
+      loaded,
+    );
     const model: Model = {
       columns: state.columns,
       selected: state.path,
       select: (column, index) => {
+        initial = false;
         // Moving a column starts the columns after it at their first item
         const path = state.path.map((part, i) => (i < column ? part : i === column ? index : 0));
-        state = regionColumns(path, depth, custom);
+        state = regionColumns(path, depth, custom, loaded);
         model.columns = state.columns;
         model.selected = state.path;
       },

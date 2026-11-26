@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import {
   dateColumns,
   formatDate,
@@ -16,6 +16,7 @@ import {
   regionDepth,
   regionPathOf,
   regionResult,
+  setStreetsUrl,
 } from "../src/components/region.ts";
 
 describe("text", () => {
@@ -55,22 +56,28 @@ describe("match-media", () => {
 
 describe("region picker", () => {
   test("levels choose the number of columns", () => {
-    expect([regionDepth("province"), regionDepth("city"), regionDepth("region")]).toEqual([
-      1, 2, 3,
-    ]);
-    expect(regionDepth("sub-district")).toBe(3);
+    expect(
+      ["province", "city", "region", "sub-district"].map((level) => regionDepth(level)),
+    ).toEqual([1, 2, 3, 4]);
   });
 
-  test("finds the places named in value and returns codes and the postcode", () => {
-    const path = regionPathOf(["广东省", "广州市", "海珠区"], 3);
-    const { columns } = regionColumns(path, 3);
-    expect(columns[0]![path[0]!]).toBe("广东省");
-    expect(columns[1]).toEqual(["广州市", "深圳市"]);
+  test("every province is there, and a place outside the old sample is found with its codes", () => {
+    const { columns } = regionColumns([0, 0, 0], 3);
+    expect(columns[0]).toHaveLength(31);
+    const path = regionPathOf(["江苏省", "苏州市", "姑苏区"], 3);
     expect(regionResult(path, 3)).toEqual({
-      value: ["广东省", "广州市", "海珠区"],
-      code: ["440000", "440100", "440105"],
-      postcode: "510220",
+      value: ["江苏省", "苏州市", "姑苏区"],
+      code: ["320000", "320500", "320508"],
+      postcode: "210000",
     });
+  });
+
+  test("a municipality's second column is the municipality, holding its districts and counties", () => {
+    const path = regionPathOf(["重庆市", "重庆市", "巫山县"], 3);
+    const { columns } = regionColumns(path, 3);
+    expect(columns[1]).toEqual(["重庆市"]);
+    expect(columns[2]).toContain("渝中区");
+    expect(regionResult(path, 3).code).toEqual(["500000", "500100", "500237"]);
   });
 
   test("an unknown name selects the first place", () => {
@@ -78,16 +85,54 @@ describe("region picker", () => {
   });
 
   test("custom-item adds an item to every column; below it only the custom item is offered", () => {
-    const { columns, path } = regionColumns([3, 0, 0], 3, "全部");
+    const guangdong = regionPathOf(["广东省"], 1, "全部")[0]!;
+    const { columns, path } = regionColumns([guangdong, 0, 0], 3, "全部");
     expect(columns[0]![0]).toBe("全部");
-    expect(columns[1]).toEqual(["全部", "广州市", "深圳市"]);
+    expect(columns[1]!.slice(0, 3)).toEqual(["全部", "广州市", "韶关市"]);
     expect(columns[2]).toEqual(["全部"]);
     expect(regionResult(path, 3, "全部")).toEqual({
       value: ["广东省", "全部", "全部"],
       code: ["440000", "", ""],
       postcode: "510000",
     });
-    expect(regionPathOf(["广东省", "全部"], 3, "全部").slice(0, 2)).toEqual([3, 0]);
+    expect(regionPathOf(["广东省", "全部"], 3, "全部").slice(0, 2)).toEqual([guangdong, 0]);
+  });
+
+  test("sub-district loads a district's streets, then offers them", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      asked.push(url);
+      return new Response(
+        JSON.stringify([
+          ["110101001", "东华门街道"],
+          ["110101002", "景山街道"],
+        ]),
+      );
+    });
+    setStreetsUrl("/streets");
+    try {
+      let loaded = 0;
+      const value = ["北京市", "北京市", "东城区", "景山街道"];
+      // Before the streets arrive, the fourth column is empty and the value stops at the district
+      const before = regionColumns(
+        regionPathOf(value, 4, "", () => loaded++),
+        4,
+      );
+      expect(before.columns[3]).toEqual([]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(loaded).toBe(1);
+      expect(asked).toEqual(["/streets?code=110101"]);
+      const path = regionPathOf(value, 4);
+      expect(regionColumns(path, 4).columns[3]).toEqual(["东华门街道", "景山街道"]);
+      expect(regionResult(path, 4)).toEqual({
+        value,
+        code: ["110000", "110100", "110101", "110101002"],
+        postcode: "100000",
+      });
+    } finally {
+      setStreetsUrl(undefined);
+      vi.unstubAllGlobals();
+    }
   });
 });
 

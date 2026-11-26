@@ -50,6 +50,7 @@ addEventListener("message", (event: MessageEvent<FromShell>) => {
       styleV2: data.styleV2,
       ad: data.ad,
       location: data.location,
+      regionStreetsUrl: "/__omr/region-streets",
       post: (message) =>
         parent.postMessage({ omr: "view", webviewId: data.webviewId, message }, shell),
     });

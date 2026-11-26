@@ -23,6 +23,7 @@ import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
 import { setAdConfig } from "./components/ad.ts";
 import { setMapLocation } from "./components/map.ts";
+import { setStreetsUrl } from "./components/region.ts";
 import {
   convertRpx,
   renderScope,
@@ -45,6 +46,8 @@ export interface ViewOptions {
   ad?: AdConfig;
   /** `location` of the simulator config: where `<map>` puts the user. */
   location?: { latitude: number; longitude: number };
+  /** Where the streets of a district are served for `<picker mode="region" level="sub-district">`. */
+  regionStreetsUrl?: string;
   post: (message: ViewToLogic) => void;
 }
 
@@ -113,6 +116,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   defineBuiltins();
   setAdConfig(options.ad);
   setMapLocation(options.location);
+  setStreetsUrl(options.regionStreetsUrl);
 
   const style = document.createElement("style");
   style.textContent = `${BASE_CSS}\n${PULL_DOWN_CSS}\n${HOST_CSS}\n${convertRpx(bundle.css, options.windowWidth, hairline)}`;
