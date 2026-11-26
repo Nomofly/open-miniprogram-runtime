@@ -823,6 +823,8 @@ describe("logic layer", () => {
         loading: true,
         "front-color": "#ffffff",
         "background-color": "#07c160",
+        "color-animation-duration": "300",
+        "color-animation-timing-func": "easeIn",
       },
     });
     const uis = sent.flatMap((message) =>
@@ -832,7 +834,12 @@ describe("logic layer", () => {
       { name: "setNavigationBarTitle", args: { webviewId: 1, title: "详情" } },
       {
         name: "setNavigationBarColor",
-        args: { webviewId: 1, frontColor: "#ffffff", backgroundColor: "#07c160" },
+        args: {
+          webviewId: 1,
+          frontColor: "#ffffff",
+          backgroundColor: "#07c160",
+          animation: { duration: 300, timingFunc: "easeIn" },
+        },
       },
       { name: "showNavigationBarLoading", args: { webviewId: 1 } },
     ]);
