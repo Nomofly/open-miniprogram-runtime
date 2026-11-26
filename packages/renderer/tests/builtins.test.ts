@@ -289,3 +289,25 @@ describe("selection", () => {
     expect(details.length).toBe(count);
   });
 });
+
+describe("editor", () => {
+  test("deleteText joins lines and moves a later selection back; setSelection and getSelection share the range", async () => {
+    const editor = mount("wx-editor", {});
+    await settle();
+    const call = (method: string, options: Record<string, unknown> = {}) =>
+      editor.omrCall!(method, [options]) as Record<string, unknown>;
+    call("setContents", { html: "<p>abcdef</p><p>gh</p>" });
+    call("setSelection", { index: 8, length: 1 });
+    expect(call("getSelection").range as object).toEqual({ index: 8, length: 1 });
+
+    call("deleteText", { index: 2, length: 5 });
+    expect(call("getContents").text).toBe("abgh\n");
+    // "h" was at 8 and stays selected at 3
+    expect(call("getSelection").range).toEqual({ index: 3, length: 1 });
+
+    // Out of range lengths stop before the last line end
+    call("deleteText", { index: 1, length: 99 });
+    expect(call("getContents").text).toBe("a\n");
+    expect(() => call("deleteText", {})).toThrow("parameter.index should be Number");
+  });
+});

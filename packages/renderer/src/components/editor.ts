@@ -207,6 +207,24 @@ export class WxEditor extends Builtin {
         const range = selection ?? this.range;
         return { text: toText(items.slice(range.index, range.index + range.length)) };
       }
+      case "getSelection": {
+        const { items, selection } = this.read();
+        const range = clampRange(items, ...rangeArgs(selection ?? this.range));
+        return { range, bounds: this.boundsOf(range) };
+      }
+      case "setSelection": {
+        const { items } = this.read();
+        this.select(clampRange(items, requiredIndex(options), Number(options.length) || 0), true);
+        return {};
+      }
+      case "getBounds": {
+        const { items } = this.read();
+        const range = clampRange(items, requiredIndex(options), Number(options.length) || 0);
+        return { bounds: this.boundsOf(range) };
+      }
+      case "deleteText":
+        this.deleteText(requiredIndex(options), Number(options.length) || 0);
+        return {};
       case "undo":
         this.undo();
         return {};
@@ -288,6 +306,46 @@ export class WxEditor extends Builtin {
     });
   }
 
+  /**
+   * Deletes a range wherever the selection is, keeping the focus as it is; a
+   * selection after the range moves back with the text.
+   */
+  private deleteText(index: number, length: number): void {
+    const { items, selection } = this.read();
+    const range = clampRange(items, index, length);
+    if (range.length === 0) return;
+    const next = replaceRange(items, range.index, range.length, []);
+    const shift = (at: number) =>
+      at >= range.index + range.length ? at - range.length : Math.min(at, range.index);
+    const current = selection ?? this.range;
+    const start = shift(current.index);
+    const end = shift(current.index + current.length);
+    this.remember();
+    this.render(next, { index: start, length: end - start }, false);
+    emit(this, "input", this.contents());
+  }
+
+  /**
+   * Where a range is in the viewport, as Quill's bounds name it. A cursor on an
+   * empty line has no box of its own: it gets the line's height, at its start.
+   */
+  private boundsOf(range: Range): Record<string, number> {
+    const area = this.area!;
+    const start = locate(area, range.index);
+    const end = locate(area, range.index + range.length);
+    const dom = document.createRange();
+    dom.setStart(start.node as Node, start.offset);
+    dom.setEnd(end.node as Node, end.offset);
+    let rect = dom.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      const node = start.node as Node;
+      const line = (node instanceof Element ? node : node.parentElement!).getBoundingClientRect();
+      rect = new DOMRect(line.left, line.top, 0, line.height);
+    }
+    const { left, top, width, height, right, bottom } = rect;
+    return { left, top, width, height, right, bottom };
+  }
+
   /** `setContents` and `clear`: the cursor goes to the end, and the editor keeps its focus state. */
   private replaceAll(items: Item[]): void {
     this.remember();
@@ -346,13 +404,19 @@ export class WxEditor extends Builtin {
     if (focus && document.activeElement !== area && area.contentEditable === "true") {
       area.focus({ preventScroll: true });
     }
-    if (document.activeElement !== area) return;
+    const selection = document.getSelection();
+    if (document.activeElement !== area) {
+      // A selection left in the blurred editor would be read back over the remembered one
+      if (selection?.anchorNode && area.contains(selection.anchorNode)) {
+        selection.removeAllRanges();
+      }
+      return;
+    }
     const start = locate(area, range.index);
     const end = locate(area, range.index + range.length);
     const dom = document.createRange();
     dom.setStart(start.node as Node, start.offset);
     dom.setEnd(end.node as Node, end.offset);
-    const selection = document.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(dom);
   }
@@ -644,6 +708,14 @@ export class WxEditorPortal extends Builtin {
     if (name) this.style.setProperty("position-anchor", name);
     else this.style.removeProperty("position-anchor");
   }
+}
+
+/** The required `index` of setSelection, getBounds and deleteText. */
+function requiredIndex(options: Record<string, unknown>): number {
+  if (typeof options.index !== "number") {
+    throw new Error("parameter error: parameter.index should be Number");
+  }
+  return options.index;
 }
 
 const rangeArgs = (range: Range) => [range.index, range.length] as const;
