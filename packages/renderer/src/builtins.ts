@@ -590,17 +590,29 @@ const AVATAR =
 
 /**
  * `<open-data>`: since base library 2.27 WeChat no longer shows user data
- * here; the nickname is "微信用户" and the avatar is gray, as on WeChat.
+ * here; the nickname is "微信用户" and the avatar is gray, as on WeChat. Other
+ * user data, and the group name the simulator has no group for, are empty:
+ * they show `default-text` and fire `error`.
  */
 class WxOpenData extends Builtin {
   private readonly root = this.attachShadow({ mode: "open" });
+  private readonly applied = new Applied();
   protected override update(): void {
     const type = this.str("type");
     if (type === "userAvatarUrl") {
       this.root.innerHTML = `<style>:host { display: inline-block; overflow: hidden; } svg { display: block; }</style>${AVATAR}`;
-    } else {
-      this.root.innerHTML = "<style>:host { display: inline; }</style>";
-      this.root.append(type === "userNickName" ? "微信用户" : "");
+      return;
+    }
+    this.root.innerHTML = "<style>:host { display: inline; }</style>";
+    if (type === "userNickName") {
+      this.root.append("微信用户");
+      return;
+    }
+    this.root.append(this.str("default-text"));
+    const changed = this.applied.changed("type", type);
+    if (changed && (type === "groupName" || type.startsWith("user"))) {
+      // After the element is in the page, so the view hears it
+      setTimeout(() => emit(this, "error", { errMsg: `open-data: ${type} is empty` }), 0);
     }
   }
 }
