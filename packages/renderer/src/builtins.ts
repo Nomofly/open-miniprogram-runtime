@@ -80,7 +80,8 @@ class WxIcon extends Builtin {
   }
   protected override update(): void {
     const icon = ICONS[this.str("type")];
-    const size = this.num("size", 23);
+    // px by default; "40rpx" or "20px" since base library 2.4.0
+    const size = lengthOf(this.props.size, 23);
     // The colour is set through the DOM, so a template value cannot add markup
     this.root.innerHTML = `<style>:host { display: inline-block; font-size: 0; line-height: 0; vertical-align: middle; } svg { display: block; }</style><svg viewBox="0 0 24 24" width="${size}" height="${size}">${icon?.svg.replaceAll('"C"', '"currentColor"') ?? ""}</svg>`;
     this.root.querySelector("svg")!.style.color = this.str("color") || icon?.color || "#000";
@@ -609,7 +610,7 @@ class WxCoverView extends Builtin {
     const value = this.props["scroll-top"];
     if (value === this.applied) return;
     this.applied = value;
-    if (value !== undefined) queueMicrotask(() => (this.scrollTop = this.num("scroll-top", 0)));
+    if (value !== undefined) queueMicrotask(() => (this.scrollTop = lengthOf(value, 0)));
   }
 }
 
