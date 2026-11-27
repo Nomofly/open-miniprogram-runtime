@@ -79,10 +79,14 @@ interface Context {
   written: ReadonlySet<string>;
   /** How many templates and includes this node is rendered inside. */
   depth: number;
+  /** How many more templates and includes the whole render may expand, shared by every branch, and whether it warned. */
+  budget: { left: number; warned: boolean };
 }
 
 /** Deeper than this, a template or include is taken to render itself without end. */
 const MAX_DEPTH = 64;
+/** More templates and includes than this in one render, as a template calling itself twice expands, stops the render there. */
+const MAX_EXPANSIONS = 10_000;
 
 /** Renders a page or component scope. */
 export function renderScope(scope: RenderScope, env: RenderEnv): VNode[] {
@@ -90,7 +94,14 @@ export function renderScope(scope: RenderScope, env: RenderEnv): VNode[] {
   if (!file) return [];
   const out: VNode[] = [];
   const written = scope.written ?? new Set();
-  renderNodes(file.nodes, { scope, file, data: scope.data, depth: 0, written }, "", out, env);
+  const budget = { left: MAX_EXPANSIONS, warned: false };
+  renderNodes(
+    file.nodes,
+    { scope, file, data: scope.data, depth: 0, written, budget },
+    "",
+    out,
+    env,
+  );
   return out;
 }
 
@@ -188,6 +199,7 @@ function renderNodes(
             file: found.file,
             data,
             depth: ctx.depth + 1,
+            budget: ctx.budget,
             // The template's data is written when what it was made from was
             written: new Set(dataWritten ? Object.keys(data) : []),
           },
@@ -204,9 +216,21 @@ function renderNodes(
   }
 }
 
+/** Whether a template or include must not expand here; warns once per render. */
 function tooDeep(ctx: Context, what: string): boolean {
-  if (ctx.depth < MAX_DEPTH) return false;
-  console.warn(`[omr] ${what} in ${ctx.file.path} is nested ${MAX_DEPTH} deep; it renders itself`);
+  const { budget } = ctx;
+  const problem =
+    budget.left <= 0
+      ? `takes the render past ${MAX_EXPANSIONS} templates and includes; the rest is not rendered`
+      : ctx.depth >= MAX_DEPTH
+        ? `is nested ${MAX_DEPTH} deep; it renders itself`
+        : undefined;
+  if (!problem) {
+    budget.left--;
+    return false;
+  }
+  if (!budget.warned) console.warn(`[omr] ${what} in ${ctx.file.path} ${problem}`);
+  budget.warned = true;
   return true;
 }
 

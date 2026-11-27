@@ -1,6 +1,6 @@
 import { compileWxml, type WebviewBundle } from "@omr/compiler";
 import { resolvePath } from "@omr/runtime";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import { convertRpx, renderScope, type VElement, type VNode } from "../src/render.ts";
 
 /** Renders a page template with data, as the view layer does before patching the DOM. */
@@ -114,6 +114,20 @@ describe("renderScope", () => {
     );
     // Templates rendered at depths 0 to 63 each add one view; the 65th is cut
     expect(show(nodes)).toBe("<wx-view>a".repeat(64));
+  });
+
+  test("a template that calls itself twice stops within one render's budget, with one warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const nodes = render(
+        `<template name="t"><view /><template is="t" /><template is="t" /></template><template is="t" />`,
+        {},
+      );
+      expect(nodes.length).toBeGreaterThan(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("custom component hosts keep every attribute as a property and only DOM attributes on the element", () => {
