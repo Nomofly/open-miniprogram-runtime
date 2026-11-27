@@ -46,21 +46,37 @@ export function metersPerPixel(latitude: number, scale: number): number {
   );
 }
 
+/** How `fitPoints` lays the points out on the map. */
+export interface FitOptions {
+  /** Kept free at the edges, in px: [top, right, bottom, left]. */
+  padding?: number[];
+  /** Keeps a scale in the map's range. */
+  limit?: (scale: number) => number;
+  /** The map's rotation in degrees, whose screen axes the box follows. */
+  rotate?: number;
+  /** Where the map's center is drawn, in px from its top left; the middle by default. */
+  origin?: { x: number; y: number };
+  /** The map's scale, kept when the points are in one place. */
+  scale?: number;
+}
+
 /**
  * The center and the largest scale that show every point inside a box of
- * `width` × `height` px less `padding` ([top, right, bottom, left]), with
- * `limit` keeping the scale in the map's range. `rotate` is the map's
- * rotation in degrees, whose screen axes the box follows. Points spread across
- * the antimeridian use their nearby copies. Points in one place give no
- * scale, so the map keeps its own.
+ * `width` × `height` px less the padding, centered in what the padding leaves.
+ * Points spread across the antimeridian use their nearby copies. Points in one
+ * place give no scale, so the map keeps its own.
  */
 export function fitPoints(
   points: LatLng[],
   width: number,
   height: number,
-  padding: number[] = [],
-  limit: (scale: number) => number = (scale) => scale,
-  rotate = 0,
+  {
+    padding = [],
+    limit = (scale) => scale,
+    rotate = 0,
+    origin = { x: width / 2, y: height / 2 },
+    scale: current = 0,
+  }: FitOptions = {},
 ): { center: LatLng; scale?: number } {
   const [top = 0, right = 0, bottom = 0, left = 0] = padding;
   const projected = points.map((point) => project(point, 0));
@@ -91,9 +107,9 @@ export function fitPoints(
   const innerHeight = Math.max(1, height - top - bottom);
   const fit = Math.min(innerWidth / (maxU - minU), innerHeight / (maxV - minV));
   const scale = Number.isFinite(fit) && fit > 0 ? limit(Math.log2(fit)) : undefined;
-  // The padding moves the points' center off the map's center by half its imbalance
-  const zoom = 2 ** (scale ?? 0);
-  const u = (minU + maxU) / 2 + (scale === undefined ? 0 : (right - left) / 2 / zoom);
-  const v = (minV + maxV) / 2 + (scale === undefined ? 0 : (bottom - top) / 2 / zoom);
+  // The points' middle goes to the middle of the padded box, which lies off the drawn center
+  const zoom = 2 ** (scale ?? current);
+  const u = (minU + maxU) / 2 - (left + innerWidth / 2 - origin.x) / zoom;
+  const v = (minV + maxV) / 2 - (top + innerHeight / 2 - origin.y) / zoom;
   return { center: unproject(u * cos - v * sin, u * sin + v * cos, 0), scale };
 }

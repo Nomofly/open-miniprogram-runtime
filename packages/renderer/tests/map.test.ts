@@ -83,8 +83,30 @@ describe("Web Mercator", () => {
     ];
     // Turned a quarter, the east-west span runs down the 150 px height
     const upright = fitPoints(points, 300, 150).scale!;
-    const turned = fitPoints(points, 300, 150, [], (scale) => scale, 90).scale!;
+    const turned = fitPoints(points, 300, 150, { rotate: 90 }).scale!;
     expect(upright - turned).toBeCloseTo(1, 5);
+  });
+
+  test("one point lands in the middle of the padded box at the map's own scale", () => {
+    const point = { latitude: 0, longitude: 0 };
+    const { center, scale } = fitPoints([point], 300, 150, { padding: [0, 0, 0, 160], scale: 10 });
+    expect(scale).toBeUndefined();
+    // The box runs from x=160 to 300, so the point sits at 230: 80 px right of the middle
+    expect(project(point, 10).x - project(center, 10).x).toBeCloseTo(80, 6);
+  });
+
+  test("the bounds center in the padded box around a center offset", () => {
+    const points = [
+      { latitude: 0, longitude: 0 },
+      { latitude: 0, longitude: 0.05 },
+    ];
+    // The center is drawn at x=300 of 400; the points' middle must still land at 200
+    const { center, scale } = fitPoints(points, 400, 300, {
+      padding: [8, 8, 8, 8],
+      origin: { x: 300, y: 150 },
+    });
+    const middle = { latitude: 0, longitude: 0.025 };
+    expect(project(middle, scale!).x - project(center, scale!).x).toBeCloseTo(-100, 6);
   });
 
   test("a meter is wider in px away from the equator", () => {
@@ -199,6 +221,27 @@ describe("<map>", () => {
   test("include-points with a new rotate in the same update fits the rotated map and keeps the rotate", async () => {
     const map = mountMap({ ...CENTER, scale: 5 });
     await settle();
+    const points = [
+      { latitude: 0, longitude: 0 },
+      { latitude: 0, longitude: 0.05 },
+    ];
+    map.omrUpdate({ ...CENTER, scale: 5, rotate: 90, "include-points": points });
+    await settle(450);
+    expect(map.omrCall!("getRotate", [{}])).toEqual({ rotate: 90 });
+    for (const point of points) {
+      const { x, y } = map.omrCall!("toScreenLocation", [point]) as { x: number; y: number };
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(300);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(150);
+    }
+  });
+
+  test("include-points that arrive while the map turns fit at, and finish, the rotation it turns to", async () => {
+    const map = mountMap({ ...CENTER, scale: 5 });
+    await settle();
+    map.omrUpdate({ ...CENTER, scale: 5, rotate: 90 });
+    await settle(100);
     const points = [
       { latitude: 0, longitude: 0 },
       { latitude: 0, longitude: 0.05 },

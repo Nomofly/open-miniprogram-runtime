@@ -241,6 +241,8 @@ export class WxMap extends Builtin {
   /** The marker whose BYCLICK callout is open. */
   private openCallout?: string;
   private stopMove?: () => void;
+  /** Where the move under way ends, which a fit that takes it over keeps. */
+  private heading?: Camera;
   private wheel?: { timer: ReturnType<typeof setTimeout> };
   private updatedPending = false;
   private locationIcon?: string;
@@ -372,7 +374,7 @@ export class WxMap extends Builtin {
       if (!this.isConnected) this.pendingFit = include;
       // The fit sets the center and scale; the rest of the update's camera still applies
       else {
-        const fit = this.fit(include, INCLUDE_PADDING, target.rotate ?? this.camera.rotate);
+        const fit = this.fit(include, INCLUDE_PADDING, target.rotate);
         void this.moveTo({ ...target, ...fit });
       }
     }
@@ -463,17 +465,21 @@ export class WxMap extends Builtin {
   }
 
   /** The center and scale that show the points inside the padding. */
-  private fit(points: LatLng[], padding: number[], rotate = this.camera.rotate): Partial<Camera> {
+  private fit(
+    points: LatLng[],
+    padding: number[],
+    rotate = this.heading?.rotate ?? this.camera.rotate,
+  ): Partial<Camera> {
     const { width, height } = this.size();
-    const { center, scale } = fitPoints(
-      points,
-      width,
-      height,
+    const { center, scale } = fitPoints(points, width, height, {
       padding,
-      (value) => this.clampScale(Math.floor(value)),
+      limit: (value) => this.clampScale(Math.floor(value)),
       rotate,
-    );
-    return scale === undefined ? { center } : { center, scale };
+      origin: this.origin(),
+      scale: this.heading?.scale ?? this.camera.scale,
+    });
+    // The fit holds at this rotation, so a move that replaces a turn ends there
+    return scale === undefined ? { center, rotate } : { center, scale, rotate };
   }
 
   // Moving the map
@@ -507,6 +513,7 @@ export class WxMap extends Builtin {
       rotate: target.rotate ?? from.rotate,
       skew: target.skew ?? from.skew,
     };
+    this.heading = to;
     const start = project(from.center, 0);
     const end = project(to.center, 0);
     this.regionChange("begin", "update");
@@ -525,6 +532,7 @@ export class WxMap extends Builtin {
     this.stopMove = move.cancel;
     await move.promise;
     if (this.stopMove === move.cancel) this.stopMove = undefined;
+    if (this.heading === to) this.heading = undefined;
     this.regionChange("end", "update");
   }
 
