@@ -206,6 +206,34 @@ describe("network", () => {
     });
   });
 
+  test("a download aborted by its last progress listener fails with abort and writes nothing", async () => {
+    // Without content-length, the last progress event comes after the body is read
+    stubProxy(
+      () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "x-omr-proxy": encodeURIComponent(JSON.stringify({ statusCode: 200, header: {} })),
+          },
+        }),
+    );
+    const fs = new MemoryFs();
+    const log = boot(
+      `
+      const task = wx.downloadFile({
+        url: "https://example.com/a.bin",
+        filePath: wx.env.USER_DATA_PATH + "/a.bin",
+        success: () => log("success"),
+        fail: (res) => log(res.errMsg),
+      });
+      task.onProgressUpdate((res) => { if (res.progress === 100) task.abort(); });
+    `,
+      {},
+      fs,
+    );
+    expect(await until(log, 1)).toEqual(["downloadFile:fail abort"]);
+    expect(() => fs.call("stat", { path: "wxfile://usr/a.bin" })).toThrow();
+  });
+
   test("wx.uploadFile posts the file and formData as multipart/form-data", async () => {
     const requests = stubProxy(() => json({ statusCode: 200, header: {}, body: '{"ok":true}' }));
     const fs = new MemoryFs();
@@ -288,5 +316,48 @@ describe("network", () => {
     ]);
     expect(sockets[0]!.url).toBe("ws://localhost:1234/ws");
     expect(sockets[0]!.sent).toEqual(["pong"]);
+  });
+
+  test("wx.closeSocket closes the socket that was latest when it was called, even if another connects right after", async () => {
+    const sockets: { url: string; closed: boolean }[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class extends EventTarget {
+        readyState = 0;
+        binaryType = "blob";
+        record: { url: string; closed: boolean };
+        constructor(url: string) {
+          super();
+          this.record = { url, closed: false };
+          sockets.push(this.record);
+          setTimeout(() => {
+            this.readyState = 1;
+            this.dispatchEvent(new Event("open"));
+          }, 0);
+        }
+        send() {}
+        close(code: number) {
+          this.record.closed = true;
+          this.readyState = 3;
+          this.dispatchEvent(Object.assign(new Event("close"), { code, reason: "" }));
+        }
+      },
+    );
+    const log = boot(`
+      wx.connectSocket({ url: "ws://localhost/a" });
+      wx.onSocketOpen(() => {
+        // B opens too; only the first open acts
+        if (getApp().log.length) return;
+        log("open");
+        wx.closeSocket({ complete: (res) => log(res.errMsg) });
+        wx.connectSocket({ url: "ws://localhost/b" });
+      });
+    `);
+    expect(await until(log, 2)).toEqual(["open", "closeSocket:ok"]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sockets).toEqual([
+      { url: "ws://localhost/a", closed: true },
+      { url: "ws://localhost/b", closed: false },
+    ]);
   });
 });

@@ -269,6 +269,8 @@ export function createNetworkApis(ctx: ApiContext): Record<string, unknown> {
           totalBytesExpectedToWrite: bytes.length,
         });
       }
+      // A progress listener may have aborted the download; nothing is written then
+      if (job.signal.aborted) throw new Error("abort");
       if (options.filePath !== undefined && options.filePath !== "") {
         const filePath = String(options.filePath);
         ctx.host.fs.call("writeFile", { path: filePath }, bytes);
@@ -467,14 +469,21 @@ export function createNetworkApis(ctx: ApiContext): Record<string, unknown> {
     onSocketClose: (listener: AnyFunction) => (globalSocketListeners.close = listener),
     onSocketError: (listener: AnyFunction) => (globalSocketListeners.error = listener),
     onSocketMessage: (listener: AnyFunction) => (globalSocketListeners.message = listener),
-    sendSocketMessage: asyncApi("sendSocketMessage", async (options) => {
-      if (!latestSocket) throw new ApiError("WebSocket is not connected");
-      return latestSocket.sendRaw(options);
-    }),
-    closeSocket: asyncApi("closeSocket", async (options) => {
-      if (!latestSocket) throw new ApiError("WebSocket is not connected");
-      return latestSocket.closeRaw(options);
-    }),
+    // The legacy socket APIs act on the task that was latest when they were called
+    sendSocketMessage: (options?: Options) => {
+      const task = latestSocket;
+      return asyncApi("sendSocketMessage", async (options) => {
+        if (!task) throw new ApiError("WebSocket is not connected");
+        return task.sendRaw(options);
+      })(options);
+    },
+    closeSocket: (options?: Options) => {
+      const task = latestSocket;
+      return asyncApi("closeSocket", async (options) => {
+        if (!task) throw new ApiError("WebSocket is not connected");
+        return task.closeRaw(options);
+      })(options);
+    },
     // The simulated network never changes
     onNetworkStatusChange: statusListeners.on,
     offNetworkStatusChange: statusListeners.off,
