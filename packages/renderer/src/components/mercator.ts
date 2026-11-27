@@ -49,7 +49,9 @@ export function metersPerPixel(latitude: number, scale: number): number {
 /**
  * The center and the largest scale that show every point inside a box of
  * `width` × `height` px less `padding` ([top, right, bottom, left]), with
- * `limit` keeping the scale in the map's range. Points in one place give no
+ * `limit` keeping the scale in the map's range. `rotate` is the map's
+ * rotation in degrees, whose screen axes the box follows. Points spread across
+ * the antimeridian use their nearby copies. Points in one place give no
  * scale, so the map keeps its own.
  */
 export function fitPoints(
@@ -58,24 +60,40 @@ export function fitPoints(
   height: number,
   padding: number[] = [],
   limit: (scale: number) => number = (scale) => scale,
+  rotate = 0,
 ): { center: LatLng; scale?: number } {
   const [top = 0, right = 0, bottom = 0, left = 0] = padding;
   const projected = points.map((point) => project(point, 0));
-  const xs = projected.map((p) => p.x);
-  const ys = projected.map((p) => p.y);
-  const [minX, maxX, minY, maxY] = [
-    Math.min(...xs),
-    Math.max(...xs),
-    Math.min(...ys),
-    Math.max(...ys),
+  // Cut the world at the widest gap between the points, so they lie in the shortest interval
+  const sorted = projected.map((p) => p.x).sort((a, b) => a - b);
+  let cut = sorted[0]!;
+  let widest = sorted[0]! + MAP_TILE - sorted.at(-1)!;
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = sorted[i]! - sorted[i - 1]!;
+    if (gap > widest) [widest, cut] = [gap, sorted[i]!];
+  }
+  const angle = (rotate * Math.PI) / 180;
+  const [cos, sin] = [Math.cos(angle), Math.sin(angle)];
+  // In the screen's axes, as the map draws a point at its rotation
+  const screen = projected.map(({ x, y }) => {
+    const wx = x < cut ? x + MAP_TILE : x;
+    return { u: wx * cos + y * sin, v: -wx * sin + y * cos };
+  });
+  const us = screen.map((p) => p.u);
+  const vs = screen.map((p) => p.v);
+  const [minU, maxU, minV, maxV] = [
+    Math.min(...us),
+    Math.max(...us),
+    Math.min(...vs),
+    Math.max(...vs),
   ];
   const innerWidth = Math.max(1, width - left - right);
   const innerHeight = Math.max(1, height - top - bottom);
-  const fit = Math.min(innerWidth / (maxX - minX), innerHeight / (maxY - minY));
+  const fit = Math.min(innerWidth / (maxU - minU), innerHeight / (maxV - minV));
   const scale = Number.isFinite(fit) && fit > 0 ? limit(Math.log2(fit)) : undefined;
   // The padding moves the points' center off the map's center by half its imbalance
   const zoom = 2 ** (scale ?? 0);
-  const shiftX = scale === undefined ? 0 : (right - left) / 2 / zoom;
-  const shiftY = scale === undefined ? 0 : (bottom - top) / 2 / zoom;
-  return { center: unproject((minX + maxX) / 2 + shiftX, (minY + maxY) / 2 + shiftY, 0), scale };
+  const u = (minU + maxU) / 2 + (scale === undefined ? 0 : (right - left) / 2 / zoom);
+  const v = (minV + maxV) / 2 + (scale === undefined ? 0 : (bottom - top) / 2 / zoom);
+  return { center: unproject(u * cos - v * sin, u * sin + v * cos, 0), scale };
 }

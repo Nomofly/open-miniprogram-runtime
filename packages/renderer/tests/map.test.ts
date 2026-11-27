@@ -3,7 +3,13 @@ import { compileWxml, type WebviewBundle } from "@omr/compiler";
 import type { ViewToLogic } from "@omr/runtime";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { defineBuiltins, type BuiltinElement } from "../src/builtins.ts";
-import { MAP_TILE, metersPerPixel, project, unproject } from "../src/components/mercator.ts";
+import {
+  fitPoints,
+  MAP_TILE,
+  metersPerPixel,
+  project,
+  unproject,
+} from "../src/components/mercator.ts";
 import { startView } from "../src/view.ts";
 
 defineBuiltins();
@@ -54,6 +60,31 @@ describe("Web Mercator", () => {
     const back = unproject(x, y, 16);
     expect(back.latitude).toBeCloseTo(point.latitude, 9);
     expect(back.longitude).toBeCloseTo(point.longitude, 9);
+  });
+
+  test("points across the antimeridian fit around it, not around the world", () => {
+    const { center, scale } = fitPoints(
+      [
+        { latitude: 0, longitude: 179.99 },
+        { latitude: 0, longitude: -179.99 },
+      ],
+      300,
+      150,
+    );
+    expect(Math.abs(center.longitude)).toBeGreaterThan(179.99);
+    // 0.02° is about 0.014 px at scale 0; 300 px fit it at about scale 14
+    expect(scale).toBeGreaterThan(13);
+  });
+
+  test("a rotated map fits the points along its own axes", () => {
+    const points = [
+      { latitude: 0, longitude: 0 },
+      { latitude: 0, longitude: 0.05 },
+    ];
+    // Turned a quarter, the east-west span runs down the 150 px height
+    const upright = fitPoints(points, 300, 150).scale!;
+    const turned = fitPoints(points, 300, 150, [], (scale) => scale, 90).scale!;
+    expect(upright - turned).toBeCloseTo(1, 5);
   });
 
   test("a meter is wider in px away from the equator", () => {
@@ -163,6 +194,62 @@ describe("<map>", () => {
     const b = project(points[1]!, scale + 1);
     expect(Math.abs(a.x - b.x) > 300 - 60 || Math.abs(a.y - b.y) > 150 - 70).toBe(true);
     expect(center.latitude).toBeCloseTo(31.225, 1);
+  });
+
+  test("include-points with a new rotate in the same update fits the rotated map and keeps the rotate", async () => {
+    const map = mountMap({ ...CENTER, scale: 5 });
+    await settle();
+    const points = [
+      { latitude: 0, longitude: 0 },
+      { latitude: 0, longitude: 0.05 },
+    ];
+    map.omrUpdate({ ...CENTER, scale: 5, rotate: 90, "include-points": points });
+    await settle(450);
+    expect(map.omrCall!("getRotate", [{}])).toEqual({ rotate: 90 });
+    for (const point of points) {
+      const { x, y } = map.omrCall!("toScreenLocation", [point]) as { x: number; y: number };
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(300);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(150);
+    }
+  });
+
+  test("a translateMarker that takes over a turning marker is not undone by the first call's move", async () => {
+    const center = project(CENTER, 16);
+    const east = unproject(center.x + 100, center.y, 16);
+    const west = unproject(center.x - 100, center.y, 16);
+    const map = mountMap({
+      ...CENTER,
+      scale: 16,
+      markers: [{ id: 1, ...CENTER, width: 20, height: 20 }],
+    });
+    // The first call turns, then moves east; the second moves west while turning
+    const first = map.omrCall!("translateMarker", [
+      { markerId: 1, destination: east, rotate: 90, duration: 50 },
+    ]);
+    await settle(10);
+    const second = map.omrCall!("translateMarker", [
+      { markerId: 1, destination: west, moveWithRotate: true, duration: 50 },
+    ]);
+    await Promise.all([first, second]);
+    await settle(200);
+    expect(parseFloat(markerBox(map, 1).style.left)).toBeCloseTo(150 - 100 - 10, 0);
+  });
+
+  test("addMarkers replacing a moving marker stops the old animation", async () => {
+    const center = project(CENTER, 16);
+    const east = unproject(center.x + 100, center.y, 16);
+    const south = unproject(center.x, center.y + 40, 16);
+    const map = mountMap({ ...CENTER, scale: 16 });
+    void map.omrCall!("addMarkers", [{ markers: [{ id: 1, ...CENTER, width: 20, height: 20 }] }]);
+    void map.omrCall!("translateMarker", [{ markerId: 1, destination: east, duration: 100 }]);
+    await settle(20);
+    void map.omrCall!("addMarkers", [{ markers: [{ id: 1, ...south, width: 20, height: 20 }] }]);
+    await settle(250);
+    const box = markerBox(map, 1);
+    expect(parseFloat(box.style.left)).toBeCloseTo(150 - 10, 0);
+    expect(parseFloat(box.style.top)).toBeCloseTo(75 + 40 - 20, 0);
   });
 
   test("a drag pans the map with regionchange begin (gesture) and end (drag)", () => {

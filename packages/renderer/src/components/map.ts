@@ -340,10 +340,12 @@ export class WxMap extends Builtin {
     if (this.applied.changed("rotate", rotate)) target.rotate = rotate;
     const skew = clamp(this.numOption("skew", 0), 0, 40);
     if (this.applied.changed("skew", skew)) target.skew = skew;
+    const include = pointsOf(this.props["include-points"] ?? this.props.includePoints);
+    const fitting = this.applied.changed("include-points", include) && include.length > 0;
     if (!this.initialized) {
       this.initialized = true;
       Object.assign(this.camera, target);
-    } else if (Object.keys(target).length > 0) {
+    } else if (Object.keys(target).length > 0 && !(fitting && this.isConnected)) {
       void this.moveTo(target);
     }
     this.camera.scale = this.clampScale(this.camera.scale);
@@ -366,10 +368,13 @@ export class WxMap extends Builtin {
     for (const name of ["polyline", "polygons", "circles"]) {
       if (this.applied.changed(name, this.props[name] ?? null)) overlays = true;
     }
-    const include = pointsOf(this.props["include-points"] ?? this.props.includePoints);
-    if (this.applied.changed("include-points", include) && include.length > 0) {
+    if (fitting) {
       if (!this.isConnected) this.pendingFit = include;
-      else void this.moveTo(this.fit(include, INCLUDE_PADDING));
+      // The fit sets the center and scale; the rest of the update's camera still applies
+      else {
+        const fit = this.fit(include, INCLUDE_PADDING, target.rotate ?? this.camera.rotate);
+        void this.moveTo({ ...target, ...fit });
+      }
     }
     this.surface.classList.toggle("satellite", this.flagOption("enable-satellite", false));
     this.draw();
@@ -458,10 +463,15 @@ export class WxMap extends Builtin {
   }
 
   /** The center and scale that show the points inside the padding. */
-  private fit(points: LatLng[], padding: number[]): Partial<Camera> {
+  private fit(points: LatLng[], padding: number[], rotate = this.camera.rotate): Partial<Camera> {
     const { width, height } = this.size();
-    const { center, scale } = fitPoints(points, width, height, padding, (value) =>
-      this.clampScale(Math.floor(value)),
+    const { center, scale } = fitPoints(
+      points,
+      width,
+      height,
+      padding,
+      (value) => this.clampScale(Math.floor(value)),
+      rotate,
     );
     return scale === undefined ? { center } : { center, scale };
   }
@@ -1196,9 +1206,16 @@ export class WxMap extends Builtin {
         if (options.clear) {
           this.addedMarkers.clear();
           this.clearedAttribute = true;
+          // Every marker shown is gone, and so are its animations
+          for (const stop of this.markerAnimations.values()) stop();
+          this.markerAnimations.clear();
+          this.moved.clear();
         }
         for (const marker of listOf(options.markers)) {
           const key = keyOf(marker.id);
+          // A replaced marker stops where its old one was going
+          this.markerAnimations.get(key)?.();
+          this.markerAnimations.delete(key);
           this.addedMarkers.set(key, marker);
           this.moved.delete(key);
         }
@@ -1258,16 +1275,18 @@ export class WxMap extends Builtin {
     return ((Math.atan2(b.x - a.x, a.y - b.y) * 180) / Math.PI + 360) % 360;
   }
 
-  /** Runs a marker animation, stopping the one it had. */
+  /** Runs a marker animation, stopping the one it had; resolves whether it ran to its end. */
   private async animateMarker(
     view: MarkerView,
     duration: number,
     step: (t: number) => { latitude: number; longitude: number; rotate: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.markerAnimations.get(view.key)?.();
+    let ended = false;
     const move = tween(
       Math.max(0, duration),
       (t) => {
+        if (t >= 1) ended = true;
         this.moved.set(view.key, step(t));
         this.drawMarkers();
         this.drawCustomCallouts();
@@ -1277,6 +1296,7 @@ export class WxMap extends Builtin {
     this.markerAnimations.set(view.key, move.cancel);
     await move.promise;
     if (this.markerAnimations.get(view.key) === move.cancel) this.markerAnimations.delete(view.key);
+    return ended;
   }
 
   private async translateMarker(options: Options): Promise<Record<string, unknown>> {
@@ -1299,12 +1319,12 @@ export class WxMap extends Builtin {
         rotate: lerpAngle(from.rotate, rotate, t),
       }));
     } else {
-      // Turning and moving take the duration each, one after the other
-      await this.animateMarker(view, duration, (t) => ({
+      // Turning and moving take the duration each, one after the other; a stopped turn does not move
+      const turned = await this.animateMarker(view, duration, (t) => ({
         ...at(0),
         rotate: lerpAngle(from.rotate, rotate, t),
       }));
-      await this.animateMarker(view, duration, (t) => ({ ...at(t), rotate }));
+      if (turned) await this.animateMarker(view, duration, (t) => ({ ...at(t), rotate }));
     }
     return {};
   }
