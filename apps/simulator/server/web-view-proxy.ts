@@ -24,6 +24,13 @@ export interface WebViewProxies {
   close(): void;
 }
 
+/**
+ * The path at every proxy that sends the browser on to the proxy of another
+ * origin's URL (`?url=`), as the bridge does for links to other sites. Unlike
+ * a site's own paths, it carries the simulator's prefix.
+ */
+const NAVIGATE_PATH = "/__omr-web-view/navigate";
+
 /** Request headers that belong to one connection, or that the proxy sets itself. */
 const REQUEST_DROPPED = new Set([
   "host",
@@ -107,6 +114,22 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
 
   const forward = async (origin: string, req: IncomingMessage, res: ServerResponse) => {
     const target = new URL(req.url ?? "/", origin);
+    if (target.pathname === NAVIGATE_PATH) {
+      let next: URL | undefined;
+      try {
+        next = new URL(target.searchParams.get("url") ?? "");
+      } catch {
+        // Answered below
+      }
+      if (!next || !/^https?:$/.test(next.protocol)) {
+        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        res.end("invalid url");
+        return;
+      }
+      res.writeHead(302, { location: await proxied(next, req), "cache-control": "no-store" });
+      res.end();
+      return;
+    }
     // The page's own document, as opposed to its images, scripts and requests
     const isDocument = ["document", "iframe", "frame"].includes(
       String(req.headers["sec-fetch-dest"]),
@@ -142,6 +165,7 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
         origin,
         userAgent,
         cookiePrefix: cookiePrefix(origin),
+        navigatePath: NAVIGATE_PATH,
         error: errorOf(target),
       });
       res.writeHead(200, {
@@ -176,7 +200,12 @@ export function createWebViewProxies(bridge: () => Promise<string>): WebViewProx
       out["cache-control"] = "no-store";
       bytes = injectHtml(
         bytes,
-        await bridgeScript({ origin, userAgent, cookiePrefix: cookiePrefix(origin) }),
+        await bridgeScript({
+          origin,
+          userAgent,
+          cookiePrefix: cookiePrefix(origin),
+          navigatePath: NAVIGATE_PATH,
+        }),
       );
     }
     res.writeHead(response.status, out);

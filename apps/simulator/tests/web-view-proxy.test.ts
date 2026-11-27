@@ -78,3 +78,22 @@ test("each origin's server gets back only its own cookies, even ones named like 
     .find((net) => net && net.family === "IPv4" && !net.internal)?.address;
   if (other) await expect(fetch(`http://${other}:${portA}/`)).rejects.toThrow();
 });
+
+test("the navigate path sends the browser to the proxy of another origin's URL", async () => {
+  const a = await site("a=1");
+  const b = await site("b=1");
+  const portA = await proxies.open(a.origin, "WeChat", "127.0.0.1");
+  const go = (url: string) =>
+    fetch(`http://127.0.0.1:${portA}/__omr-web-view/navigate?url=${encodeURIComponent(url)}`, {
+      redirect: "manual",
+    });
+  const response = await go(`${b.origin}/list?page=2#top`);
+  expect(response.status).toBe(302);
+  const portB = await proxies.open(b.origin, "WeChat", "127.0.0.1");
+  expect(response.headers.get("location")).toBe(`http://127.0.0.1:${portB}/list?page=2#top`);
+  // Following it reaches the other site, through its own proxy
+  expect(await (await fetch(response.headers.get("location")!)).text()).toBe("ok");
+  expect(b.seen.at(-1)!.host).toBe(new URL(b.origin).host);
+  expect(a.seen).toHaveLength(0);
+  expect((await go("javascript:alert(1)")).status).toBe(400);
+});

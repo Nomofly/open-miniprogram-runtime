@@ -18,6 +18,8 @@ export interface WebViewBridgeConfig {
   userAgent: string;
   /** The prefix of this origin's cookie names, which `document.cookie` hides. */
   cookiePrefix: string;
+  /** The proxy's path that sends the browser to another origin's proxy, given its URL in `?url=`. */
+  navigatePath: string;
   /** Set on the proxy's error page: the document could not be loaded. */
   error?: { url: string; fullUrl: string };
 }
@@ -154,7 +156,8 @@ if (config && window.parent !== window) {
     addEventListener("popstate", () => state("location"));
     addEventListener("hashchange", () => state("location"));
 
-    // Links to the real origin stay in the proxy, so the page keeps its bridge
+    // Links stay in a proxy, so the page keeps its bridge: this one for the real origin,
+    // the other origin's for another site
     document.addEventListener(
       "click",
       (event) => {
@@ -162,9 +165,13 @@ if (config && window.parent !== window) {
         if (!(link instanceof HTMLAnchorElement) || event.defaultPrevented) return;
         if (link.target && link.target !== "_self") return;
         const url = new URL(link.href);
-        if (url.origin !== config.origin) return;
-        event.preventDefault();
-        location.assign(location.origin + url.pathname + url.search + url.hash);
+        if (url.origin === config.origin) {
+          event.preventDefault();
+          location.assign(location.origin + url.pathname + url.search + url.hash);
+        } else if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) {
+          event.preventDefault();
+          location.assign(`${config.navigatePath}?url=${encodeURIComponent(url.href)}`);
+        }
       },
       true,
     );
