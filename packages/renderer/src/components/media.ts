@@ -361,6 +361,7 @@ export class WxVideo extends Builtin {
     // A full-screen video that leaves the page gives the screen back
     if (this.fullScreen) {
       this.fullScreen = false;
+      this.turn = 0;
       this.fullScreenStyle.textContent = "";
       this.notifyFullScreen(false);
     }
@@ -767,13 +768,16 @@ export class WxAudio extends Builtin {
   /** Without a source, the clip that was playing stops, as the media load algorithm makes it. */
   private clearSource(): void {
     this.audio.removeAttribute("src");
+    // Loading stops playback without a pause event
     this.audio.load();
+    this.button.innerHTML = PLAY_ICON;
   }
   /** AudioContext: `setSrc` replaces the source until the template changes `src` again. */
   omrCall(method: string, args: unknown[]): void {
     switch (method) {
       case "setSrc": {
-        const src = typeof args[0] === "string" ? this.omrResolveAsset(args[0]) : "";
+        // Resolved, an empty path would name the page's directory
+        const src = typeof args[0] === "string" && args[0] ? this.omrResolveAsset(args[0]) : "";
         if (src) this.audio.setAttribute("src", src);
         else this.clearSource();
         break;

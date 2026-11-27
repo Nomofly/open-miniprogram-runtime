@@ -241,6 +241,22 @@ describe("video", () => {
     expect(video.currentTime).toBe(75);
   });
 
+  test("a sideways full-screen video that leaves the page and comes back seeks along the bar again", () => {
+    const el = mount({ src: "clip.mp4" });
+    const video = videoOf(el);
+    Object.defineProperty(video, "duration", { value: 100 });
+    void el.omrCall!("requestFullScreen", [{ direction: -90 }]);
+    el.remove();
+    document.body.append(el);
+    vi.spyOn(inner(el, ".track"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 20 }),
+    );
+    const progress = inner(el, ".progress");
+    progress.dispatchEvent(new PointerEvent("pointerdown", { clientX: 50, clientY: 10 }));
+    progress.dispatchEvent(new PointerEvent("pointerup", { clientX: 50, clientY: 10 }));
+    expect(video.currentTime).toBe(25);
+  });
+
   test("initial-time seeks once the metadata is in, without seekcomplete", () => {
     const el = mount({ src: "clip.mp4", "initial-time": 3 });
     const fired = events(el);
@@ -262,5 +278,22 @@ describe("audio", () => {
     expect(load).toHaveBeenCalledTimes(1);
     void el.omrCall!("setSrc", [""]);
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  test("setSrc('') clears the clip instead of loading the page's directory, and the card shows play again", () => {
+    const el = document.createElement("wx-audio") as unknown as BuiltinElement & {
+      omrResolveAsset: (src: string) => string;
+    };
+    el.omrResolveAsset = (src) => `http://sim.test/pages/index/${src}`;
+    el.omrUpdate({ src: "song.mp3", controls: true });
+    document.body.append(el);
+    const audio = el.shadowRoot!.querySelector("audio")!;
+    const button = el.shadowRoot!.querySelector(".button")!;
+    const playIcon = button.innerHTML;
+    audio.dispatchEvent(new Event("play"));
+    expect(button.innerHTML).not.toBe(playIcon);
+    void el.omrCall!("setSrc", [""]);
+    expect(audio.hasAttribute("src")).toBe(false);
+    expect(button.innerHTML).toBe(playIcon);
   });
 });
