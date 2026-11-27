@@ -356,6 +356,10 @@ export function createCanvasApis({ host, files }: ApiContext) {
   const nodes = new Map<string, MiniCanvas>();
   /** What the legacy contexts drew, by WebView and node id, kept for `reserve` and exports. */
   const legacy = new Map<string, OffscreenCanvas>();
+  /** Pages that were unloaded: a draw still loading its images does not bring their canvas back. */
+  const released = new Set<number>();
+  /** The last legacy draw of each `canvas-id`; the next one waits for it, so batches land in order. */
+  const drawing = new Map<string, Promise<void>>();
 
   const nodeOf = (webviewId: number, info: CanvasNodeInfo): MiniCanvas => {
     const key = `${webviewId}:${info.canvasNodeId}`;
@@ -423,10 +427,17 @@ export function createCanvasApis({ host, files }: ApiContext) {
         if (typeof reserve === "function") [reserve, callback] = [false, reserve];
         const drawn = commands;
         commands = [];
-        void draw(drawn, Boolean(reserve)).then(
-          () => callback?.(),
-          (error: Error) => console.error(`[omr] CanvasContext.draw: ${error.message}`),
+        // After the canvas's earlier draws, even of other contexts, whether they worked or not
+        const run = (drawing.get(canvasId) ?? Promise.resolve()).then(() =>
+          draw(drawn, Boolean(reserve)).then(
+            () => callback?.(),
+            (error: Error) => console.error(`[omr] CanvasContext.draw: ${error.message}`),
+          ),
         );
+        drawing.set(canvasId, run);
+        void run.then(() => {
+          if (drawing.get(canvasId) === run) drawing.delete(canvasId);
+        });
       },
     };
     for (const [name, property] of Object.entries(LEGACY_SETTERS)) {
@@ -486,6 +497,10 @@ export function createCanvasApis({ host, files }: ApiContext) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       await replay(ctx, drawn);
       ctx.restore();
+      if (released.has(webviewId)) {
+        legacy.delete(key);
+        return;
+      }
       const bitmap = await createImageBitmap(canvas);
       host.sendView(webviewId, { type: "canvasFrame", canvasNodeId: info.canvasNodeId, bitmap });
     };
@@ -512,8 +527,17 @@ export function createCanvasApis({ host, files }: ApiContext) {
     return { canvas, scale: dpr };
   };
 
+  /** A page is gone: its canvases are released. */
+  const releasePage = (webviewId: number) => {
+    released.add(webviewId);
+    for (const map of [nodes, legacy]) {
+      for (const key of map.keys()) if (key.startsWith(`${webviewId}:`)) map.delete(key);
+    }
+  };
+
   return {
     nodeOf,
+    releasePage,
     apis: {
       createCanvasContext,
       createOffscreenCanvas: (options: Options = {}) =>

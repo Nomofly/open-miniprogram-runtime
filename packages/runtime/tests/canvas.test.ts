@@ -2,6 +2,7 @@ import { crc32, inflateSync } from "node:zlib";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { encodePng } from "../src/api/canvas.ts";
 import { MemoryFs, startLogic } from "../src/index.ts";
+import type { LogicToShell } from "../src/index.ts";
 
 const SYSTEM = {
   windowWidth: 375,
@@ -13,15 +14,16 @@ const SYSTEM = {
 };
 const MENU_BUTTON = { width: 87, height: 32, top: 24, right: 368, bottom: 56, left: 281 };
 
-/** Boots a logic layer whose only page runs `onLoad` and opens it. */
-function boot(onLoad: string) {
-  const handle = startLogic(() => {}, { fs: new MemoryFs() });
+/** Boots a logic layer whose first page runs `onLoad` and opens it; `sent` gets what it posts. */
+function boot(onLoad: string, sent: LogicToShell[] = []) {
+  const handle = startLogic((message) => sent.push(message), { fs: new MemoryFs() });
   const files = {
     "app.js": "App({ log: [] });",
     "pages/index/index.js": `const log = (entry) => getApp().log.push(entry);
       Page({ async onLoad() {\n${onLoad}\n} });`,
+    "pages/other/other.js": "Page({});",
   };
-  const pages = ["pages/index/index"];
+  const pages = ["pages/index/index", "pages/other/other"];
   handle({
     type: "boot",
     manifest: {
@@ -44,7 +46,8 @@ function boot(onLoad: string) {
       .join("\n"),
   });
   handle({ type: "view", webviewId: 1, message: { type: "ready" } });
-  return () => (globalThis as unknown as { getApp(): { log: unknown[] } }).getApp().log;
+  const log = () => (globalThis as unknown as { getApp(): { log: unknown[] } }).getApp().log;
+  return Object.assign(log, { handle });
 }
 
 async function until(log: () => unknown[], count: number) {
@@ -195,5 +198,103 @@ describe("Canvas", () => {
       header: {},
       stream: true,
     });
+  });
+});
+
+describe("legacy CanvasContext", () => {
+  /** A canvas whose 2D context records the calls replayed on it. */
+  function stubDrawing() {
+    const calls: unknown[][] = [];
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        width: number;
+        height: number;
+        constructor(width: number, height: number) {
+          this.width = width;
+          this.height = height;
+        }
+        getContext() {
+          return new Proxy(
+            { measureText: () => ({ width: 0 }) },
+            {
+              get: (target, key) =>
+                key in target
+                  ? target[key as "measureText"]
+                  : (...args: unknown[]) => calls.push([key, ...args]),
+              set: () => true,
+            },
+          );
+        }
+      },
+    );
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1 }));
+    // A network image arrives when the test lets it
+    let arrive = () => {};
+    vi.stubGlobal(
+      "fetch",
+      () =>
+        new Promise<Response>((resolve) => {
+          arrive = () =>
+            resolve(
+              new Response(new Uint8Array(PNG_SIGNATURE), {
+                headers: {
+                  "x-omr-proxy": encodeURIComponent(
+                    JSON.stringify({ statusCode: 200, header: {} }),
+                  ),
+                },
+              }),
+            );
+        }),
+    );
+    return { calls, arrive: () => arrive() };
+  }
+  /** Answers each canvas query of the view with a 10 x 10 canvas. */
+  const answerQueries = (sent: LogicToShell[], handle: (message: any) => void, from = 0) => {
+    for (const message of sent.slice(from)) {
+      if (message.type !== "toView" || message.message.type !== "query") continue;
+      handle({
+        type: "view",
+        webviewId: message.webviewId,
+        message: {
+          type: "queryResult",
+          queryId: message.message.queryId,
+          results: [{ node: { canvasNodeId: 1, width: 10, height: 10 } }],
+        },
+      });
+    }
+    return sent.length;
+  };
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  test("draws land in the order they were made, even when an earlier one waits for an image", async () => {
+    const { calls, arrive } = stubDrawing();
+    const sent: LogicToShell[] = [];
+    const log = boot(
+      `
+      const first = wx.createCanvasContext("c");
+      first.drawImage("https://img.example.com/a.png", 0, 0);
+      first.draw(true, () => log("first"));
+      const second = wx.createCanvasContext("c");
+      second.fillRect(1, 2, 3, 4);
+      second.draw(true, () => log("second"));
+    `,
+      sent,
+    );
+    let seen = 0;
+    for (let i = 0; i < 5; i++) {
+      seen = answerQueries(sent, log.handle, seen);
+      await tick();
+    }
+    arrive();
+    for (let i = 0; i < 10; i++) {
+      seen = answerQueries(sent, log.handle, seen);
+      await tick();
+    }
+    expect(log()).toEqual(["first", "second"]);
+    const names = calls
+      .map(([name]) => name)
+      .filter((name) => name !== "save" && name !== "restore" && name !== "setTransform");
+    expect(names).toEqual(["drawImage", "fillRect"]);
   });
 });

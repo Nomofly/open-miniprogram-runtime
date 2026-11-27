@@ -679,6 +679,7 @@ export function createWx(host: WxHost) {
     voipApis.releasePage(webviewId);
     observerApis.releasePage(webviewId);
     animationApis.releasePage(webviewId);
+    canvasApis.releasePage(webviewId);
   };
 
   const setStorage = (key: string, data: unknown) => {
