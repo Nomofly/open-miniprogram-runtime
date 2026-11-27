@@ -8,12 +8,15 @@ import { resolvePath } from "../paths.ts";
 import { asyncApi, safeCall, type AnyFunction, type Options } from "./common.ts";
 import { isFsPath, type ApiContext } from "./context.ts";
 import { actionSheet, consentOf, requireParam } from "./device.ts";
+import { proxyStream } from "./network.ts";
 
 /** The size of generated photos: portrait, as a phone takes them. */
 const PHOTO_WIDTH = 600;
 const PHOTO_HEIGHT = 800;
 /** The duration of chosen videos picked from the album, in seconds. */
 const ALBUM_VIDEO_SECONDS = 10;
+/** How long a network image may take, as `wx.downloadFile` allows by default. */
+const IMAGE_TIMEOUT = 60_000;
 /** How often audio reports its progress, in milliseconds. */
 const AUDIO_TICK_MS = 250;
 const DEFAULT_AUDIO_SECONDS = 10;
@@ -35,7 +38,22 @@ export function createMediaApis(ctx: ApiContext): Record<string, unknown> {
   /** The bytes of an image or another file, and a path the Mini Program can use for it. */
   const load = async (src: string) => {
     const path = resolveSrc(src);
-    if (!isFsPath(path) && /^(https?|data):/i.test(path)) {
+    // Network images go through the simulator's request proxy: WeChat loads them without CORS
+    if (!isFsPath(path) && /^https?:/i.test(path)) {
+      const result = await proxyStream(
+        { url: path, method: "GET", header: {} },
+        AbortSignal.timeout(IMAGE_TIMEOUT),
+        () => {},
+        () => {},
+      ).catch(() => undefined);
+      const status = result?.head.statusCode ?? 0;
+      if (!result || status < 200 || status >= 300) throw new Error("download image fail");
+      return {
+        bytes: result.bytes,
+        path: ctx.files.writeTemp(result.bytes, extensionOf(path) || "png"),
+      };
+    }
+    if (!isFsPath(path) && /^data:/i.test(path)) {
       const response = await fetch(path).catch(() => undefined);
       if (!response?.ok) throw new Error("download image fail");
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -310,6 +328,8 @@ class InnerAudio {
   protected loaded = false;
   protected readonly listeners = new Map<string, Set<AnyFunction>>();
   private loading?: ReturnType<typeof setTimeout>;
+  /** The start a `play()` of a loaded source queued for the next turn. */
+  private queued?: ReturnType<typeof setTimeout>;
   private ticker?: ReturnType<typeof setInterval>;
   /** Whether `play()` waits for the source to load. */
   private playWhenLoaded = false;
@@ -364,10 +384,13 @@ class InnerAudio {
       setTimeout(() => this.emit("Error", { errMsg: "src is empty", errCode: 10003 }), 0);
       return;
     }
-    if (this.loaded) setTimeout(() => this.start(), 0);
+    if (this.loaded) this.queued = setTimeout(() => this.start(), 0);
     else this.playWhenLoaded = true;
   }
   pause() {
+    // A play still waiting to start or to load is called off too
+    this.playWhenLoaded = false;
+    clearTimeout(this.queued);
     if (this.paused) return;
     this.halt();
     this.emit("Pause");
@@ -396,8 +419,9 @@ class InnerAudio {
     // Playing again after the end starts over
     if (this.position >= this.seconds) this.position = 0;
     this.paused = false;
-    this.emit("Play");
+    // Before the listeners run, so a listener that stops or destroys the audio clears it
     this.ticker = setInterval(() => this.tick(), AUDIO_TICK_MS);
+    this.emit("Play");
   }
   private tick() {
     this.position += (AUDIO_TICK_MS / 1000) * this.playbackRate;
@@ -416,6 +440,7 @@ class InnerAudio {
     this.emit("Ended");
   }
   private halt() {
+    clearTimeout(this.queued);
     clearInterval(this.ticker);
     this.ticker = undefined;
     this.paused = true;

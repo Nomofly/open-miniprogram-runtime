@@ -111,7 +111,7 @@ const eventApis = (on: string, off: string) => {
 export function createDeviceApis(ctx: ApiContext): {
   apis: Record<string, unknown>;
   /** Puts text on the simulated clipboard, as WeChat's own menus do without the privacy check. */
-  copy(text: string): void;
+  copy: (text: string) => void;
 } {
   const { host } = ctx;
   const { manifest } = host;

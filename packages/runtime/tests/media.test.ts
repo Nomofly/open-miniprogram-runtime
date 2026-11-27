@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import { MemoryFs, startLogic } from "../src/index.ts";
 import type { LogicToShell, SimulatorConfig, ViewToLogic } from "../src/index.ts";
 
@@ -186,6 +186,71 @@ describe("media APIs", () => {
       "TimeUpdate 0.5/0.5 false",
       "Ended 0.5/0.5 true",
     ]);
+  });
+
+  test("a play that has not started yet is called off by stop or pause, and a listener can destroy a playing audio", async () => {
+    const { log } = boot(
+      {
+        "app.js": APP,
+        [`${PAGE}.js`]: `
+          const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const make = (name) => {
+            const audio = wx.createInnerAudioContext();
+            audio.onPlay(() => getApp().log.push(name + " play"));
+            audio.src = "https://example.com/a.mp3";
+            return audio;
+          };
+          Page({ async onLoad() {
+            // Paused while it loads
+            const loading = make("loading");
+            loading.play();
+            loading.pause();
+            // Stopped in the turn it was asked to play
+            const stopped = make("stopped");
+            await wait(20);
+            stopped.play();
+            stopped.stop();
+            // Destroyed by its own play listener, while looping
+            const destroyed = wx.createInnerAudioContext();
+            destroyed.loop = true;
+            destroyed.src = "https://example.com/b.mp3";
+            destroyed.onPlay(() => destroyed.destroy());
+            destroyed.play();
+            await wait(600);
+            getApp().log.push("time " + destroyed.currentTime);
+          } });`,
+      },
+      { pages: [PAGE] },
+      { media: { audioDuration: 0.5 } },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(log()).toEqual(["time 0"]);
+  });
+
+  test("getImageInfo loads a network image through the request proxy", async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(png.buffer).setUint32(16, 30);
+    new DataView(png.buffer).setUint32(20, 20);
+    const asked: unknown[] = [];
+    vi.stubGlobal("fetch", async (path: string, init: RequestInit) => {
+      asked.push([path, JSON.parse(init.body as string).url]);
+      const head = { statusCode: 200, header: { "content-type": "image/png" } };
+      return new Response(png, {
+        headers: { "x-omr-proxy": encodeURIComponent(JSON.stringify(head)) },
+      });
+    });
+    try {
+      const { log } = boot(
+        page({ onLoad: `push(await wx.getImageInfo({ src: "https://img.example.com/a.png" }));` }),
+        { pages: [PAGE] },
+      );
+      await settle(10);
+      expect(asked).toEqual([["/__omr/request", "https://img.example.com/a.png"]]);
+      expect(log()).toMatchObject([{ errMsg: "getImageInfo:ok", width: 30, height: 20 }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   test("an InnerAudioContext with a missing local file reports an error instead of playing", async () => {
