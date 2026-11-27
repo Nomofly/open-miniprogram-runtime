@@ -244,7 +244,14 @@ export function trackDrag(
   );
 }
 
-/** Runs `step` with the eased progress on each animation frame for `duration` milliseconds. */
+/**
+ * Runs `step` with the eased progress on each animation frame for `duration`
+ * milliseconds. Only the last frame gets 1, so `progress >= 1` tells a step
+ * the animation ended, even where an easing rounds to 1 a moment early.
+ */
+/** The largest progress below 1. */
+const BEFORE_END = 1 - Number.EPSILON / 2;
+
 export function animate(
   duration: number,
   step: (progress: number) => void,
@@ -259,7 +266,7 @@ export function animate(
   const tick = (now: number) => {
     // A frame's timestamp can precede `start`, as it is when the frame began
     const t = Math.max(0, Math.min(1, (now - start) / duration));
-    step(easing(t));
+    step(t < 1 ? Math.min(easing(t), BEFORE_END) : 1);
     if (t < 1) frame = requestAnimationFrame(tick);
   };
   frame = requestAnimationFrame(tick);

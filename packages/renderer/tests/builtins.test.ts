@@ -91,6 +91,22 @@ describe("animate", () => {
     expect(seen.at(-1)).toBe(1);
     expect(seen.every((t) => t >= 0 && t <= 1)).toBe(true);
   });
+
+  test("only the last frame gets 1, even when the easing rounds to 1 a frame early", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const seen: number[] = [];
+    // easeOutCubic is exactly 1 in floating point a few microseconds before the end
+    vi.spyOn(performance, "now").mockReturnValue(1000);
+    animate(250, (t) => seen.push(t));
+    frames.shift()!(1250 - 0.0005);
+    frames.shift()!(1250);
+    expect(seen.filter((t) => t >= 1)).toHaveLength(1);
+    expect(seen.at(-1)).toBe(1);
+  });
 });
 
 describe("progress", () => {
