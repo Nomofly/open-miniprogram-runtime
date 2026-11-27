@@ -86,6 +86,21 @@ describe("renderScope", () => {
     expect((render(wxml, data) as VElement[]).every((node) => !node.written)).toBe(true);
   });
 
+  test("template data written field by field: a field is written only when its own expression read written data", () => {
+    const wxml = `<template name="t"><view a="{{triggered}}" b="{{n}}" c="{{m}}" /></template>
+<template is="t" data="{{triggered: triggered, n: n, 'm': 1}}" />
+<template is="t" data="{{triggered, ...rest, n: 2}}" />
+<template is="t" data="{{['triggered']: triggered}}" />`;
+    const data = { triggered: false, n: 0, rest: { n: 1, m: 3 }, list: [1] };
+    const written = (names: string[]) =>
+      (render(wxml, data, {}, new Set(names)) as VElement[]).map((node) => node.written ?? []);
+    // A literal with computed keys is written as a whole, when it reads written data
+    expect(written(["n"])).toEqual([["b"], [], []]);
+    expect(written(["triggered"])).toEqual([["a"], ["a"], ["a"]]);
+    // A spread writes the fields it brings, unless a later field replaces them
+    expect(written(["rest"])).toEqual([[], ["c"], []]);
+  });
+
   test("a lone mustache keeps its value type, while mixed text becomes a string", () => {
     const [el] = render(`<view data-n="{{count}}" title="n={{count}}" hidden="{{!show}}" />`, {
       count: 2,

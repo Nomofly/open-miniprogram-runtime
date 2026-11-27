@@ -125,6 +125,101 @@ function evaluateWritten(value: Value, ctx: Context, env: RenderEnv): [unknown, 
   return [result, read];
 }
 
+/**
+ * A template's `data` and which of its fields are written: each field whose
+ * expression read a written name. Fields are told apart in an object literal,
+ * such as `{{a: x, ...y}}`; any other value is written as a whole.
+ */
+function templateData(
+  value: Value | undefined,
+  ctx: Context,
+  env: RenderEnv,
+): [Record<string, unknown>, Set<string>] {
+  if (value === undefined) return [{}, new Set()];
+  const result = evaluateValue(value, lookupIn(ctx, env));
+  const data = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  if (ctx.written.size === 0) return [data, new Set()];
+  const fields =
+    typeof value !== "string" && value.length === 1 && typeof value[0] !== "string"
+      ? objectFields(value[0]!.e)
+      : undefined;
+  if (!fields) {
+    const [, read] = evaluateWritten(value, ctx, env);
+    return [data, new Set(read ? Object.keys(data) : [])];
+  }
+  const written = new Set<string>();
+  for (const field of fields) {
+    const [fieldValue, read] = evaluateWritten([{ e: field.expression }], ctx, env);
+    // A later field replaces an earlier one of its name, written or not
+    const names =
+      field.key !== undefined
+        ? [field.key]
+        : fieldValue && typeof fieldValue === "object"
+          ? Object.keys(fieldValue)
+          : [];
+    for (const name of names) {
+      if (read) written.add(name);
+      else written.delete(name);
+    }
+  }
+  return [data, written];
+}
+
+/**
+ * The fields of an object literal expression, such as `{a: x, b, ...c}`: a
+ * named field with its expression, or a spread without a key. Undefined for
+ * anything else, or a literal this does not take apart, such as one with
+ * computed keys, methods or template strings.
+ */
+function objectFields(expression: string): { key?: string; expression: string }[] | undefined {
+  const source = expression.trim();
+  if (!source.startsWith("{") || !source.endsWith("}")) return undefined;
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 1;
+  for (let i = 1; i < source.length - 1; i++) {
+    const char = source[i]!;
+    if (char === "`") return undefined;
+    if (char === '"' || char === "'") {
+      // Skips the string, escapes included
+      for (i++; i < source.length - 1 && source[i] !== char; i++) if (source[i] === "\\") i++;
+      if (i >= source.length - 1) return undefined;
+    } else if ("([{".includes(char)) depth++;
+    else if (")]}".includes(char)) depth--;
+    else if (char === "," && depth === 0) {
+      parts.push(source.slice(start, i));
+      start = i + 1;
+    }
+    if (depth < 0) return undefined;
+  }
+  if (depth !== 0) return undefined;
+  parts.push(source.slice(start, -1));
+  const fields: { key?: string; expression: string }[] = [];
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    if (part.startsWith("...")) {
+      fields.push({ expression: part.slice(3) });
+      continue;
+    }
+    const match =
+      /^(?:([A-Za-z_$][\w$]*)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*(?::([\s\S]*))?$/.exec(
+        part,
+      );
+    if (!match) return undefined;
+    const [, name, double, single, rest] = match;
+    const key = name ?? (double !== undefined ? (JSON.parse(`"${double}"`) as string) : single!);
+    if (rest === undefined) {
+      // Shorthand: only a plain name reads itself
+      if (name === undefined) return undefined;
+      fields.push({ key, expression: name });
+    } else {
+      fields.push({ key, expression: rest });
+    }
+  }
+  return fields;
+}
+
 function renderNodes(
   nodes: TemplateNode[],
   ctx: Context,
@@ -189,9 +284,7 @@ function renderNodes(
           break;
         }
         if (tooDeep(ctx, `template "${name}"`)) break;
-        const [value, dataWritten] =
-          node.data === undefined ? [{}, false] : evaluateWritten(node.data, ctx, env);
-        const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+        const [data, dataWritten] = templateData(node.data, ctx, env);
         renderNodes(
           found.nodes,
           {
@@ -200,8 +293,7 @@ function renderNodes(
             data,
             depth: ctx.depth + 1,
             budget: ctx.budget,
-            // The template's data is written when what it was made from was
-            written: new Set(dataWritten ? Object.keys(data) : []),
+            written: dataWritten,
           },
           `${key}=${name}/`,
           out,
