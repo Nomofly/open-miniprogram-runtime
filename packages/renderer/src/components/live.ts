@@ -301,8 +301,11 @@ export class WxLivePusher extends LiveStream {
   private suspended = false;
   /** Whether the Mini Program is in the background. */
   private background = false;
-  /** Authorization that arrived in the background: its preview (and autopush) start on return. */
-  private deferred = false;
+  /**
+   * A preview, and with `push` a push, asked for in the background, whether by
+   * authorization with autopush or by the context; it starts when the app returns.
+   */
+  private deferred?: { push: boolean };
   /** Set by `switchCamera`, which overrides `device-position`. */
   private position?: string;
   private torch = false;
@@ -332,7 +335,7 @@ export class WxLivePusher extends LiveStream {
     if (!mounted) {
       this.auth = undefined;
       this.previewing = false;
-      this.deferred = false;
+      this.deferred = undefined;
       this.state = "idle";
     }
     document.dispatchEvent(
@@ -348,12 +351,6 @@ export class WxLivePusher extends LiveStream {
       this.render();
       return;
     }
-    // WeChat stops the camera in the background, so nothing starts until the app returns
-    if (this.background) {
-      this.deferred = true;
-      this.render();
-      return;
-    }
     this.startPreview();
     if (this.flag("autopush")) this.start();
   }
@@ -365,6 +362,11 @@ export class WxLivePusher extends LiveStream {
   }
   private startPreview(): void {
     if (this.previewing || !this.allowed()) return;
+    // WeChat stops the camera in the background, so nothing starts until the app returns
+    if (this.background) {
+      this.deferred ??= { push: false };
+      return;
+    }
     this.previewing = true;
     this.render();
     if (this.flagOn("enable-camera")) this.codes([1003]);
@@ -375,6 +377,10 @@ export class WxLivePusher extends LiveStream {
   private start(): void {
     if (!this.allowed()) throw new Error(this.auth?.errMsg ?? "camera is not ready");
     if (this.state !== "idle" || this.suspended) return;
+    if (this.background) {
+      this.deferred = { push: true };
+      return;
+    }
     this.startPreview();
     if (!PUSHABLE.test(this.str("url"))) {
       this.codes([3002, -1307]);
@@ -388,6 +394,7 @@ export class WxLivePusher extends LiveStream {
   }
   private stop(): void {
     this.halt();
+    if (this.deferred) this.deferred.push = false;
     this.state = "idle";
     this.render();
   }
@@ -457,10 +464,11 @@ export class WxLivePusher extends LiveStream {
     if (!background) return;
     this.background = !visible;
     if (visible && this.deferred) {
-      this.deferred = false;
+      const { push } = this.deferred;
+      this.deferred = undefined;
       if (this.allowed() && this.mounted) {
         this.startPreview();
-        if (this.flag("autopush")) this.start();
+        if (push) this.start();
       }
     }
     // Returning clears the suspension even when the preview stopped in the background
@@ -494,6 +502,7 @@ export class WxLivePusher extends LiveStream {
         this.startPreview();
         break;
       case "stopPreview":
+        this.deferred = undefined;
         this.halt();
         this.previewing = false;
         this.state = "idle";

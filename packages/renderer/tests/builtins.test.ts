@@ -400,6 +400,35 @@ describe("live", () => {
     }
   });
 
+  test("a pusher's context cannot start its preview or push in the background; they start on return unless stopped", () => {
+    vi.useFakeTimers();
+    try {
+      const pusher = mount("wx-live-pusher", { url: "rtmp://a/push" }) as Live;
+      const fired = codes(pusher);
+      pusher.omrPageVisibility(false, true);
+      pusher.omrLivePusherState({});
+      void pusher.omrCall!("startPreview", []);
+      void pusher.omrCall!("start", []);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([]);
+      pusher.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toContain(1001);
+
+      const other = mount("wx-live-pusher", { url: "rtmp://b/push" }) as Live;
+      const otherFired = codes(other);
+      other.omrPageVisibility(false, true);
+      other.omrLivePusherState({});
+      void other.omrCall!("start", []);
+      void other.omrCall!("stop", []);
+      other.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(otherFired).not.toContain(1001);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a pusher whose preview stopped in the background can start once the app returns", () => {
     vi.useFakeTimers();
     try {
