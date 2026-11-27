@@ -226,6 +226,21 @@ describe("video", () => {
     ]);
   });
 
+  test("turned sideways in full screen, dragging along the progress bar seeks along its turned length", () => {
+    const el = mount({ src: "clip.mp4" });
+    const video = videoOf(el);
+    Object.defineProperty(video, "duration", { value: 100 });
+    // direction -90 turns the video a quarter clockwise, so the bar runs down the screen
+    void el.omrCall!("requestFullScreen", [{ direction: -90 }]);
+    vi.spyOn(inner(el, ".track"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 20, height: 200 }),
+    );
+    const progress = inner(el, ".progress");
+    progress.dispatchEvent(new PointerEvent("pointerdown", { clientX: 10, clientY: 150 }));
+    progress.dispatchEvent(new PointerEvent("pointerup", { clientX: 10, clientY: 150 }));
+    expect(video.currentTime).toBe(75);
+  });
+
   test("initial-time seeks once the metadata is in, without seekcomplete", () => {
     const el = mount({ src: "clip.mp4", "initial-time": 3 });
     const fired = events(el);
@@ -234,5 +249,18 @@ describe("video", () => {
     expect(video.currentTime).toBe(3);
     video.dispatchEvent(new Event("seeked"));
     expect(fired.map((event) => event.name)).toEqual(["loadedmetadata"]);
+  });
+});
+
+describe("audio", () => {
+  test("clearing src stops the clip that was playing", () => {
+    const el = document.createElement("wx-audio") as unknown as BuiltinElement;
+    el.omrUpdate({ src: "song.mp3" });
+    document.body.append(el);
+    const load = vi.spyOn(el.shadowRoot!.querySelector("audio")!, "load");
+    el.omrUpdate({ src: "" });
+    expect(load).toHaveBeenCalledTimes(1);
+    void el.omrCall!("setSrc", [""]);
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });

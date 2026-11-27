@@ -282,6 +282,8 @@ export class WxVideo extends Builtin {
   private readonly applied = new Applied();
   private readonly resize = new ResizeObserver(() => this.refresh());
   private fullScreen = false;
+  /** How far full screen turns the video, in degrees clockwise: 0, 90 or -90. */
+  private turn = 0;
   private pictureInPicture = false;
   private danmuRow = 0;
   /** Whether danmu show: `enable-danmu` at first, then the danmu button. */
@@ -442,10 +444,16 @@ export class WxVideo extends Builtin {
     video.addEventListener("click", () => {
       if (this.flagOn("controls")) this.showControls(!this.controlsShown);
     });
-    // Dragging along the progress bar seeks where it is let go
+    // Dragging along the progress bar seeks where it is let go; turned sideways, the bar runs down or up the screen
     const fraction = (event: PointerEvent) => {
       const box = parts.progress.querySelector(".track")!.getBoundingClientRect();
-      return box.width > 0 ? Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) : 0;
+      const [along, length] =
+        this.turn === 90
+          ? [event.clientY - box.top, box.height]
+          : this.turn === -90
+            ? [box.bottom - event.clientY, box.height]
+            : [event.clientX - box.left, box.width];
+      return length > 0 ? Math.max(0, Math.min(1, along / length)) : 0;
     };
     parts.progress.addEventListener("pointerdown", (event) => {
       if (!(video.duration > 0)) return;
@@ -623,6 +631,7 @@ export class WxVideo extends Builtin {
       direction = this.video.videoWidth > this.video.videoHeight ? -90 : 0;
     }
     this.fullScreen = on;
+    this.turn = !on || direction === 0 ? 0 : direction === 90 ? -90 : 90;
     const box =
       "position: fixed !important; top: 0 !important; left: 0 !important; z-index: 10000 !important; margin: 0 !important; border-radius: 0 !important;";
     this.fullScreenStyle.textContent = !on
@@ -745,7 +754,7 @@ export class WxAudio extends Builtin {
     const src = this.str("src");
     if (this.applied.changed("src", src)) {
       if (src) this.audio.setAttribute("src", src);
-      else this.audio.removeAttribute("src");
+      else this.clearSource();
     }
     this.audio.loop = this.flag("loop");
     this.card.hidden = !this.flag("controls");
@@ -755,13 +764,18 @@ export class WxAudio extends Builtin {
     this.name.textContent = this.str("name", "未知音频") || "未知音频";
     this.author.textContent = this.str("author", "未知作者") || "未知作者";
   }
+  /** Without a source, the clip that was playing stops, as the media load algorithm makes it. */
+  private clearSource(): void {
+    this.audio.removeAttribute("src");
+    this.audio.load();
+  }
   /** AudioContext: `setSrc` replaces the source until the template changes `src` again. */
   omrCall(method: string, args: unknown[]): void {
     switch (method) {
       case "setSrc": {
         const src = typeof args[0] === "string" ? this.omrResolveAsset(args[0]) : "";
         if (src) this.audio.setAttribute("src", src);
-        else this.audio.removeAttribute("src");
+        else this.clearSource();
         break;
       }
       case "play":
