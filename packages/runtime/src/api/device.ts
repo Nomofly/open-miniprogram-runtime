@@ -356,17 +356,26 @@ export function createDeviceApis(ctx: ApiContext): {
       idleCallbacks.delete(id);
     },
 
-    // Payments
-    requestPayment: asyncApi("requestPayment", async (options) => {
-      for (const name of ["timeStamp", "nonceStr", "package", "paySign"]) {
-        requireParam(options, name, "String");
-      }
-      return pay(config.payment?.amount);
-    }),
-    requestCommonPayment: asyncApi("requestCommonPayment", async (options) => {
-      const signData = parseSignData(options, 1022);
-      return pay(signData.amount?.order_amount);
-    }),
+    // Payments: a payment the user tapped keeps the tap for its callbacks, where WeChat allows
+    // wx.requestSubscribeMessage
+    requestPayment: asyncApi(
+      "requestPayment",
+      async (options) => {
+        for (const name of ["timeStamp", "nonceStr", "package", "paySign"]) {
+          requireParam(options, name, "String");
+        }
+        return pay(config.payment?.amount);
+      },
+      { passesTapGesture: true },
+    ),
+    requestCommonPayment: asyncApi(
+      "requestCommonPayment",
+      async (options) => {
+        const signData = parseSignData(options, 1022);
+        return pay(signData.amount?.order_amount);
+      },
+      { passesTapGesture: true },
+    ),
     requestVirtualPayment: withErrCode(
       asyncApi("requestVirtualPayment", async (options) => {
         const signData = parseSignData(options, -15016);

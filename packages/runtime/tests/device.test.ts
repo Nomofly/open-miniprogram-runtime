@@ -145,6 +145,31 @@ describe("device and open APIs", () => {
     });
   });
 
+  test("requestSubscribeMessage may be called from the success callback of a payment the user tapped", async () => {
+    const payment = `{ timeStamp: "1", nonceStr: "n", package: "prepay_id=1", signType: "RSA", paySign: "s" }`;
+    const subscribe = `() => wx.requestSubscribeMessage({ tmplIds: ["t-1"], success: push, fail: push })`;
+    const { log, uis, answer, tap } = boot(
+      page({
+        onLoad: `wx.requestPayment({ ...${payment}, success: ${subscribe} });`,
+        pay: `wx.requestPayment({ ...${payment}, success: ${subscribe} });`,
+      }),
+      { pages: [PAGE] },
+    );
+    await settle();
+    // The user pays on the sheet, long after the tap
+    answer("payment", { pay: true });
+    await settle();
+    // A payment without a tap does not let its callback subscribe
+    expect(log()).toEqual([
+      { errMsg: "requestSubscribeMessage:fail can only be invoked by user TAP gesture." },
+    ]);
+    tap("pay");
+    await settle();
+    answer("payment", { pay: true });
+    await settle();
+    expect(uis().at(-1)).toMatchObject({ name: "subscribeMessage", args: { tmplIds: ["t-1"] } });
+  });
+
   test("closing the payment sheet fails requestPayment with cancel; virtual payment reports errCode -2", async () => {
     const payment = `{ timeStamp: "1", nonceStr: "n", package: "prepay_id=1", signType: "RSA", paySign: "s" }`;
     const { log, uis, answer, tap } = boot(
