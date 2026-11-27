@@ -55,6 +55,8 @@ export class WxInput extends Builtin {
     });
     field.addEventListener("keydown", (raw) => {
       const event = raw as KeyboardEvent;
+      // Enter that picks an IME candidate belongs to the IME
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key !== "Enter" || !this.confirmsOnEnter(event)) return;
       event.preventDefault();
       emit(this, "confirm", { value: field.value });

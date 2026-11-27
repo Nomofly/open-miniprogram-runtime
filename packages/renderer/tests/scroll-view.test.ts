@@ -132,3 +132,73 @@ describe("scroll-view defaults", () => {
     expect(scrolled({ "enable-back-to-top": false }, tall)).toHaveLength(0);
   });
 });
+
+test("a plain selector matches only the caller's template; >>> reaches into components", async () => {
+  const bundle = {
+    route: "pages/a/a",
+    page: {
+      path: "pages/a/a",
+      template: "pages/a/a.wxml",
+      usingComponents: { child: "components/child/child" },
+      prefix: "",
+    },
+    components: {
+      "components/child/child": {
+        path: "components/child/child",
+        template: "components/child/child.wxml",
+        usingComponents: {},
+        prefix: "child",
+      },
+    },
+    files: {
+      "pages/a/a.wxml": compileWxml(
+        `<child class="kid" /><view id="status">page</view>`,
+        "pages/a/a.wxml",
+      ),
+      "components/child/child.wxml": compileWxml(
+        `<view id="status">child</view>`,
+        "components/child/child.wxml",
+      ),
+    },
+    wxs: {},
+    css: "",
+    window: {},
+  } as unknown as WebviewBundle;
+  const posted: ViewToLogic[] = [];
+  const handle = startView({
+    bundle,
+    windowWidth: 375,
+    assetBase: "/files/",
+    styleV2: false,
+    post: (message) => posted.push(message),
+  });
+  handle({ type: "init", data: {}, seq: 1 });
+  await settle();
+  const attach = posted.find((message) => message.type === "attach");
+  if (attach?.type !== "attach") throw new Error("no attach");
+  handle({
+    type: "componentInit",
+    nodeId: attach.nodeId,
+    data: {},
+    options: { externalClasses: [], styleIsolation: "isolated" },
+    seq: 1,
+  });
+  await settle();
+  expect(document.querySelectorAll("#status")).toHaveLength(2);
+  handle({
+    type: "query",
+    queryId: 1,
+    requests: ["#status", ".kid >>> #status"].map((selector) => ({
+      selector,
+      all: true,
+      scopeNodeId: 0,
+      fields: { dataset: true, properties: ["id"] },
+    })),
+  });
+  await settle();
+  const answer = posted.find((message) => message.type === "queryResult");
+  if (answer?.type !== "queryResult") throw new Error("no answer");
+  const [plain, crossing] = answer.results as unknown[][];
+  expect(plain).toHaveLength(1);
+  expect(crossing).toHaveLength(1);
+});

@@ -1004,6 +1004,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       }
       const replyId = ++nextReplyId;
       inputReplies.set(replyId, { input: target as BuiltinElement, value: toText(detail.value) });
+      latestReplies.set(target, replyId);
       dispatch(target, name, detail, false, {}, replyId);
     },
     true,
@@ -1011,6 +1012,8 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
 
   /** Inputs waiting for their bindinput handler's result, with the value the handler saw. */
   const inputReplies = new Map<number, { input: BuiltinElement; value: string }>();
+  /** The reply each input waits for: the one to its latest edit. */
+  const latestReplies = new WeakMap<Element, number>();
   let nextReplyId = 0;
 
   // A focused <input> or <textarea> raises the simulated keyboard: the page moves up so the
@@ -1322,13 +1325,20 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     return key;
   };
 
-  /** The rendered elements a selector matches in a scope's template, in document order. */
+  /**
+   * The rendered elements a selector matches in a scope's template, in
+   * document order. Only `>>>` reaches into the templates of components.
+   */
   const selectIn = (scope: Scope, selector: string): Element[] => {
+    const crossing = selector.includes(">>>");
     let css = selector.replace(/>>>/g, " ");
     // A component's classes carry its prefix
     if (scope.owner) css = css.replace(/\.(-?[_a-zA-Z][\w-]*)/g, `.${scope.def.prefix}--$1`);
     try {
-      return [...scope.root.querySelectorAll(css)].filter((el) => states.has(el));
+      return [...scope.root.querySelectorAll(css)].filter((el) => {
+        const state = states.get(el);
+        return state !== undefined && (crossing || state.ownerId === scope.nodeId);
+      });
     } catch {
       console.error(`[omr] invalid selector "${selector}"`);
       return [];
@@ -1397,10 +1407,11 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "eventResult": {
         const pending = inputReplies.get(message.replyId);
         inputReplies.delete(message.replyId);
-        // Typing that came after the event wins over the handler's late answer
+        // Typing that came after the event wins over the handler's late answer, even typing that came back to the same text
         if (
           pending &&
           message.value !== undefined &&
+          latestReplies.get(pending.input) === message.replyId &&
           pending.input.omrFormValue?.() === pending.value
         ) {
           pending.input.omrReplaceValue?.(message.value);
