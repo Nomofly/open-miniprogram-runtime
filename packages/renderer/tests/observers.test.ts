@@ -1,5 +1,8 @@
-import { describe, expect, test } from "vite-plus/test";
+// @vitest-environment happy-dom
+import type { ViewToLogic } from "@omr/runtime";
+import { describe, expect, test, vi } from "vite-plus/test";
 import {
+  createObservers,
   crossesThreshold,
   expandBox,
   measureIntersection,
@@ -99,5 +102,75 @@ describe("intersection observers", () => {
       "(height: 600px) and (orientation: landscape)",
     );
     expect(mediaQueryOf({})).toBe("all");
+  });
+});
+
+describe("intersection observer sizes", () => {
+  test("a target that grows inside a fixed reference crosses a threshold without a render or scroll", () => {
+    const resizeObservers: { callback: () => void; watched: Set<Element> }[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        watched = new Set<Element>();
+        callback: () => void;
+        constructor(callback: () => void) {
+          this.callback = callback;
+          resizeObservers.push(this);
+        }
+        observe(el: Element) {
+          this.watched.add(el);
+        }
+        unobserve(el: Element) {
+          this.watched.delete(el);
+        }
+      },
+    );
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => fn(0));
+    try {
+      const target = document.createElement("div");
+      const reference = document.createElement("div");
+      document.body.append(target, reference);
+      let bottom = 30;
+      target.getBoundingClientRect = () =>
+        DOMRect.fromRect({ x: 0, y: 0, width: 100, height: bottom });
+      reference.getBoundingClientRect = () =>
+        DOMRect.fromRect({ x: 0, y: 0, width: 100, height: 30 });
+      const posted: ViewToLogic[] = [];
+      const observers = createObservers({
+        select: (_, selector) => [selector === ".ref" ? reference : target],
+        describe: () => ({ id: "", dataset: {} }),
+        post: (message) => posted.push(message),
+      });
+      const margins = { left: 0, right: 0, top: 0, bottom: 0 };
+      observers.receive({
+        type: "observeIntersection",
+        request: {
+          observerId: 1,
+          scopeNodeId: 0,
+          selector: ".target",
+          all: false,
+          relatives: [{ selector: ".ref", margins }],
+          thresholds: [0.75],
+          initialRatio: 0,
+        },
+      });
+      observers.afterRender();
+      const sizes = resizeObservers[0]!;
+      expect(sizes.watched.has(target)).toBe(true);
+      expect(sizes.watched.has(reference)).toBe(true);
+      // Grown to 60 px, half of it is inside the 30 px reference
+      bottom = 60;
+      sizes.callback();
+      const ratios = posted.flatMap((message) =>
+        message.type === "intersection" ? [message.result.intersectionRatio] : [],
+      );
+      expect(ratios).toEqual([1, 0.5]);
+      observers.receive({ type: "unobserve", observerId: 1 });
+      expect(sizes.watched.has(target)).toBe(false);
+      expect(sizes.watched.has(reference)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      document.body.replaceChildren();
+    }
   });
 });

@@ -156,8 +156,15 @@ export function createObservers(host: ObserverHost) {
       targets: chosen.map((el) => ({ el, ratio: request.initialRatio })),
       relatives,
     });
+    for (const el of boxesOf(observations.get(request.observerId)!)) watch(el, 1);
     return true;
   };
+
+  /** The elements of an observation whose size can move a ratio: its targets and reference nodes. */
+  const boxesOf = ({ targets, relatives }: Observation): Element[] => [
+    ...targets.map((target) => target.el),
+    ...relatives.filter((el): el is Element => !!el),
+  ];
 
   const viewport = (): Box => ({
     left: 0,
@@ -208,8 +215,21 @@ export function createObservers(host: ObserverHost) {
   // Scroll events do not bubble, but a capturing listener hears those of every scroll-view
   document.addEventListener("scroll", queueCheck, { capture: true, passive: true });
   window.addEventListener("resize", queueCheck);
-  // Layout that changes without a render, such as an image that loaded
-  new ResizeObserver(queueCheck).observe(document.documentElement);
+  // Layout that changes without a render, such as an image that loaded or a target that grew
+  const resizes = new ResizeObserver(queueCheck);
+  resizes.observe(document.documentElement);
+  /** How many observations watch each element's size. */
+  const watched = new Map<Element, number>();
+  const watch = (el: Element, change: 1 | -1) => {
+    const count = (watched.get(el) ?? 0) + change;
+    if (count > 0) {
+      if (!watched.has(el)) resizes.observe(el);
+      watched.set(el, count);
+    } else {
+      watched.delete(el);
+      resizes.unobserve(el);
+    }
+  };
 
   return {
     receive(message: ObserverMessage) {
@@ -232,6 +252,8 @@ export function createObservers(host: ObserverHost) {
         }
         case "unobserve": {
           pending.delete(message.observerId);
+          const observation = observations.get(message.observerId);
+          if (observation) for (const el of boxesOf(observation)) watch(el, -1);
           observations.delete(message.observerId);
           const media = mediaQueries.get(message.observerId);
           media?.list.removeEventListener("change", media.listener);
