@@ -621,6 +621,8 @@ addEventListener("message", (event: MessageEvent<BridgeToShell>) => {
       toLogic({
         type: "webViewInvoke",
         webviewId,
+        // Each real origin has a proxy of its own, so the sender's origin names the site
+        origin: event.origin,
         callId: data.callId,
         name: data.name,
         args: data.args,

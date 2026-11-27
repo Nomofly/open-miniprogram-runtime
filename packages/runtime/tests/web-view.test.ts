@@ -58,9 +58,13 @@ function boot(platform: "ios" | "android" = "ios", config: SimulatorConfig = {})
   };
   /** Calls `WeixinJSBridge.invoke` from the web page and resolves its answer. */
   let callId = 0;
-  const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+  const invoke = async (
+    name: string,
+    args: Record<string, unknown> = {},
+    origin = "http://127.0.0.1:4100",
+  ) => {
     const id = ++callId;
-    handle({ type: "webViewInvoke", webviewId, callId: id, name, args });
+    handle({ type: "webViewInvoke", webviewId, origin, callId: id, name, args });
     for (let i = 0; i < 20; i++) {
       await settle();
       const answer = sent.find(
@@ -185,6 +189,16 @@ describe("JSSDK in <web-view>", () => {
     expect((await invoke("getLocalImgData", { localId: "wxlocalresource://nope" })).err_msg).toBe(
       "getLocalImgData:fail invalid localId",
     );
+    // A document of another site, behind another proxy, cannot use the image or its upload
+    const other = "http://127.0.0.1:4200";
+    expect((await invoke("getLocalImgData", { localId: localIds[0] }, other)).err_msg).toBe(
+      "getLocalImgData:fail invalid localId",
+    );
+    const { serverId } = await invoke("uploadImage", { localId: localIds[0] });
+    expect((await invoke("downloadImage", { serverId }, other)).err_msg).toBe(
+      "downloadImage:fail invalid serverId",
+    );
+    expect((await invoke("downloadImage", { serverId })).err_msg).toBe("downloadImage:ok");
   });
 
   test("Android gets JSON strings and bare base64, as the JSSDK parses them there", async () => {

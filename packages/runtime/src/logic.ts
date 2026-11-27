@@ -928,7 +928,7 @@ export function startLogic(
       ? { err_msg: `${message.name}:fail the web-view is closed` }
       : message.name === "invokeMiniProgramAPI"
         ? miniProgramApi(record, message.args)
-        : await wxApi!.webViewInvoke(message.name, message.args);
+        : await wxApi!.webViewInvoke(message.name, message.args, message.origin);
     post({ type: "webViewResult", webviewId: message.webviewId, callId: message.callId, result });
   };
 

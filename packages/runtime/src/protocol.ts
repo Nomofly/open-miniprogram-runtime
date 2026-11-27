@@ -520,6 +520,8 @@ export type ShellToLogic =
   | {
       type: "webViewInvoke";
       webviewId: number;
+      /** The origin of the document that called, as the shell saw it; it scopes the images the page chose. */
+      origin: string;
       callId: number;
       name: string;
       args: Record<string, unknown>;
