@@ -8,6 +8,7 @@ function render(
   wxml: string,
   data: Record<string, unknown>,
   extraFiles: Record<string, string> = {},
+  written?: Set<string>,
 ) {
   // Through JSON, as the shell sends the bundle to the page
   const files = JSON.parse(
@@ -28,7 +29,7 @@ function render(
   };
   const bundle = { route: "pages/a/a", page, components: {}, files, wxs: {}, css: "", window: {} };
   return renderScope(
-    { nodeId: 0, def: page, data, transformClass: (value) => value },
+    { nodeId: 0, def: page, data, transformClass: (value) => value, written },
     {
       bundle: bundle as WebviewBundle,
       wxsModules: () => ({}),
@@ -70,6 +71,19 @@ describe("renderScope", () => {
     // Keys follow wx:key, so reordering the list moves nodes instead of rewriting them
     expect(first!.key).toContain(":b/");
     expect(second!.key).toContain(":a/");
+  });
+
+  test("an element names the attributes whose bindings read written data, through wx:for and template data", () => {
+    const wxml = `<view a="{{on}}" b="{{other}}" />
+<view wx:for="{{list}}" c="{{item}}" d="{{other}}" />
+<template name="t"><view e="{{x}}" /></template>
+<template is="t" data="{{x: on}}" />
+<template is="t" data="{{x: other}}" />`;
+    const data = { on: false, other: 1, list: [1] };
+    const nodes = render(wxml, data, {}, new Set(["on", "list"])) as VElement[];
+    expect(nodes.map((node) => node.written ?? [])).toEqual([["a"], ["c"], ["e"], []]);
+    // Without a setData, nothing is written
+    expect((render(wxml, data) as VElement[]).every((node) => !node.written)).toBe(true);
   });
 
   test("a lone mustache keeps its value type, while mixed text becomes a string", () => {

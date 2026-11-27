@@ -18,7 +18,6 @@ export class WxScrollView extends Builtin {
   private pull = 0;
   private stopAnimation = () => {};
   /** When the user triggered a refresh. */
-  private refreshedAt = 0;
   /** A finger down on an enhanced scroll view; `started` once it has moved, which is when WeChat's drag begins. */
   private enhancedDrag?: { x: number; y: number; t: number; started: boolean };
   /**
@@ -67,7 +66,6 @@ export class WxScrollView extends Builtin {
         if (this.state !== "pulling") return;
         if (this.pull >= this.threshold()) {
           this.state = "refreshing";
-          this.refreshedAt = performance.now();
           this.glide(this.threshold());
           emit(this, "refresherrefresh");
         } else {
@@ -171,7 +169,6 @@ export class WxScrollView extends Builtin {
       case "triggerRefresh":
         if (!this.flag("refresher-enabled") || this.state === "refreshing") return;
         this.state = "refreshing";
-        this.refreshedAt = performance.now();
         this.glide(this.threshold(), undefined, Number(options.duration ?? 300) || 300);
         emit(this, "refresherrefresh");
         return;
@@ -248,10 +245,9 @@ export class WxScrollView extends Builtin {
       return;
     }
     if (this.state !== "refreshing" || triggered) return;
-    // WeChat sets the property itself when the user pulls, so setting it to false closes the
-    // refresher even when the page's data was already false. Renders right after the pull, such
-    // as a loading flag the refresh handler sets, do not close it.
-    if (changed || performance.now() - this.refreshedAt > 300) this.close("refresherrestore");
+    // WeChat sets the property itself when the user pulls, so the page writing false closes the
+    // refresher even when its data was already false; renders that do not write it leave it open
+    if (changed || this.written.has("refresher-triggered")) this.close("refresherrestore");
   }
 
   private reset(): void {

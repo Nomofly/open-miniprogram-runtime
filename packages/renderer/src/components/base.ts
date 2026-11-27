@@ -3,7 +3,8 @@ import { toText } from "../expression.ts";
 import { convertRpx } from "../render.ts";
 
 export interface BuiltinElement extends HTMLElement {
-  omrUpdate(props: Record<string, unknown>): void;
+  /** `written` names the properties whose bindings a `setData` wrote, even with the value they had. */
+  omrUpdate(props: Record<string, unknown>, written?: readonly string[]): void;
   /** Tapping a checkbox, radio, switch or picker. */
   omrActivate?(): void;
   /** The value a `<form>` submits for this control, by its `name`. */
@@ -84,8 +85,11 @@ export function lengthOf(value: unknown, fallback = 0): number {
 
 export abstract class Builtin extends HTMLElement implements BuiltinElement {
   props: Record<string, unknown> = {};
-  omrUpdate(props: Record<string, unknown>): void {
+  /** The properties the page wrote in this update, even with the value they had. */
+  protected written: ReadonlySet<string> = new Set();
+  omrUpdate(props: Record<string, unknown>, written: readonly string[] = []): void {
     this.props = props;
+    this.written = new Set(written);
     this.update();
   }
   protected update(): void {}

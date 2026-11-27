@@ -3,6 +3,7 @@ import type {
   ElementNode,
   ScopeDefinition,
   TemplateNode,
+  Value,
   WebviewBundle,
   WxmlFile,
 } from "@omr/compiler";
@@ -37,6 +38,8 @@ export interface VElement {
   component?: { path: string; props: Record<string, unknown> };
   /** Set on a `<slot>` of a component template: the slot name, empty for the default slot. */
   slot?: string;
+  /** The attributes whose bindings read data a `setData` wrote since the last render, even with the same value. */
+  written?: string[];
   el?: HTMLElement;
 }
 
@@ -51,6 +54,8 @@ export interface RenderScope {
   transformClass(value: string): string;
   /** For a component with `componentGenerics`: the component path each generic tag renders. */
   generics?: Record<string, string>;
+  /** The top-level data keys a `setData` wrote since the last render. */
+  written?: ReadonlySet<string>;
 }
 
 export interface RenderEnv {
@@ -70,6 +75,8 @@ interface Context {
   data: Record<string, unknown>;
   /** `wx:for` item and index variables. */
   vars?: Map<string, unknown>;
+  /** The names, data keys or variables, whose values a `setData` wrote since the last render. */
+  written: ReadonlySet<string>;
   /** How many templates and includes this node is rendered inside. */
   depth: number;
 }
@@ -82,7 +89,8 @@ export function renderScope(scope: RenderScope, env: RenderEnv): VNode[] {
   const file = env.bundle.files[scope.def.template];
   if (!file) return [];
   const out: VNode[] = [];
-  renderNodes(file.nodes, { scope, file, data: scope.data, depth: 0 }, "", out, env);
+  const written = scope.written ?? new Set();
+  renderNodes(file.nodes, { scope, file, data: scope.data, depth: 0, written }, "", out, env);
   return out;
 }
 
@@ -92,6 +100,18 @@ function lookupIn(ctx: Context, env: RenderEnv) {
     if (Object.hasOwn(ctx.data, name)) return ctx.data[name];
     return env.wxsModules(ctx.file)[name];
   };
+}
+
+/** Evaluates a value and tells whether it read a name a `setData` wrote since the last render. */
+function evaluateWritten(value: Value, ctx: Context, env: RenderEnv): [unknown, boolean] {
+  const lookup = lookupIn(ctx, env);
+  if (ctx.written.size === 0) return [evaluateValue(value, lookup), false];
+  let read = false;
+  const result = evaluateValue(value, (name) => {
+    if (ctx.written.has(name)) read = true;
+    return lookup(name);
+  });
+  return [result, read];
 }
 
 function renderNodes(
@@ -117,7 +137,14 @@ function renderNodes(
         break;
       }
       case "for": {
-        for (const [index, item] of listEntries(evaluateValue(node.list, lookup))) {
+        const [list, listWritten] = evaluateWritten(node.list, ctx, env);
+        // The item and index of a written list are written; otherwise they hide data of their names
+        const written = new Set(ctx.written);
+        for (const name of [node.item, node.index]) {
+          if (listWritten) written.add(name);
+          else written.delete(name);
+        }
+        for (const [index, item] of listEntries(list)) {
           const itemKey =
             node.key === undefined
               ? index
@@ -127,7 +154,13 @@ function renderNodes(
           const vars = new Map(ctx.vars);
           vars.set(node.item, item);
           vars.set(node.index, index);
-          renderNodes([node.node], { ...ctx, vars }, `${key}:${toText(itemKey)}/`, out, env);
+          renderNodes(
+            [node.node],
+            { ...ctx, vars, written },
+            `${key}:${toText(itemKey)}/`,
+            out,
+            env,
+          );
         }
         break;
       }
@@ -145,14 +178,18 @@ function renderNodes(
           break;
         }
         if (tooDeep(ctx, `template "${name}"`)) break;
-        const data = node.data === undefined ? {} : evaluateValue(node.data, lookup);
+        const [value, dataWritten] =
+          node.data === undefined ? [{}, false] : evaluateWritten(node.data, ctx, env);
+        const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
         renderNodes(
           found.nodes,
           {
             scope: ctx.scope,
             file: found.file,
-            data: data && typeof data === "object" ? (data as Record<string, unknown>) : {},
+            data,
             depth: ctx.depth + 1,
+            // The template's data is written when what it was made from was
+            written: new Set(dataWritten ? Object.keys(data) : []),
           },
           `${key}=${name}/`,
           out,
@@ -264,7 +301,12 @@ function renderElement(
   }
 
   const raw: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(node.attrs)) raw[name] = evaluateValue(value, lookup);
+  const written: string[] = [];
+  for (const [name, value] of Object.entries(node.attrs)) {
+    const [result, read] = evaluateWritten(value, ctx, env);
+    raw[name] = result;
+    if (read) written.push(name);
+  }
   const componentPath = scope.def.usingComponents[node.tag] ?? scope.generics?.[node.tag];
   const attrs: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(raw)) {
@@ -296,6 +338,7 @@ function renderElement(
     children,
     ownerId: scope.nodeId,
     component: componentPath ? { path: componentPath, props: raw } : undefined,
+    ...(written.length > 0 && { written }),
   });
 }
 

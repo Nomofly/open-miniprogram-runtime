@@ -251,6 +251,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     el: HTMLElement,
     previous: Record<string, unknown>,
     attrs: Record<string, unknown>,
+    written: readonly string[] = [],
   ) => {
     // A virtual host has no box for its class and style to apply to
     const virtual = states.get(el)?.scope?.options.virtualHost;
@@ -263,7 +264,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     }
     // `animation="{{animationData}}"` plays a `wx.createAnimation` export over the element's style
     animations.attribute(el, attrs.animation, previous.style !== attrs.style);
-    (el as Partial<BuiltinElement>).omrUpdate?.(attrs);
+    (el as Partial<BuiltinElement>).omrUpdate?.(attrs, written);
   };
 
   const createNode = (vnode: VNode): Node => {
@@ -283,7 +284,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       (el as Partial<BuiltinElement>).omrResolveAsset = (src) =>
         env.resolveAsset(src, owner.def.template);
     }
-    applyAttrs(el, {}, vnode.attrs);
+    applyAttrs(el, {}, vnode.attrs, vnode.written);
     mountContent(vnode);
     return el;
   };
@@ -301,7 +302,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     state.ownerId = vnode.ownerId;
     state.events = vnode.events;
     state.props = vnode.attrs;
-    applyAttrs(el, previous.attrs, vnode.attrs);
+    applyAttrs(el, previous.attrs, vnode.attrs, vnode.written);
     mountContent(vnode, previous);
   };
 
@@ -442,6 +443,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       scope.generics = generics;
     }
     const vnodes = renderScope(scope, env);
+    scope.written = undefined;
     if (scope === page && bundle.customTabBar) {
       vnodes.push({
         kind: "element",
@@ -1381,7 +1383,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "setData": {
         const scope = scopes.get(message.nodeId);
         if (scope) {
-          for (const [key, value] of Object.entries(message.patch)) setPath(scope.data, key, value);
+          const written = new Set(scope.written);
+          for (const [key, value] of Object.entries(message.patch)) {
+            setPath(scope.data, key, value);
+            // `list[0].name` and `user.name` write `list` and `user`
+            written.add(key.split(/[.[]/, 1)[0]!);
+          }
+          scope.written = written;
           dirty.add(scope);
         }
         break;
