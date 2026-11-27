@@ -51,7 +51,8 @@ export function setStreetsUrl(url: string | undefined): void {
 
 /**
  * The streets of a district, or undefined while they load; `loaded` is
- * called once they arrive. Without a source, a district has no streets.
+ * called once they arrive. Without a source, a district has no streets. A
+ * failed load is forgotten, so the next time the district is shown asks again.
  */
 function streetsOf(district: Region, loaded?: () => void): Region[] | undefined {
   const known = streets.get(district.code);
@@ -59,23 +60,43 @@ function streetsOf(district: Region, loaded?: () => void): Region[] | undefined 
   if (!streetsUrl) return [];
   if (!known) {
     const url = `${streetsUrl}?code=${encodeURIComponent(district.code)}`;
-    streets.set(
-      district.code,
-      fetch(url)
-        .then((response) => (response.ok ? (response.json() as Promise<[string, string][]>) : []))
-        .catch(() => [] as [string, string][])
-        .then((list) => {
+    const request = fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<[string, string][]>;
+      })
+      .then(
+        (list) => {
           streets.set(
             district.code,
             list.map(([code, name]) => ({ name, code, postcode: district.postcode })),
           );
           loaded?.();
-        }),
-    );
+        },
+        () => {
+          if (streets.get(district.code) === request) streets.delete(district.code);
+        },
+      );
+    streets.set(district.code, request);
   } else if (loaded) {
-    void known.then(loaded);
+    void known.then(() => {
+      if (Array.isArray(streets.get(district.code))) loaded();
+    });
   }
   return undefined;
+}
+
+/** Whether the streets of the district `path` selects are still loading. */
+export function streetsLoading(path: number[], depth: number, customItem = ""): boolean {
+  if (depth < 4) return false;
+  let list: Region[] = allRegions();
+  for (let level = 0; level < 3; level++) {
+    const region = placeAt(list, path[level] ?? 0, customItem);
+    if (!region) return false;
+    if (level === 2) return streets.get(region.code) instanceof Promise;
+    list = region.children ?? [];
+  }
+  return false;
 }
 
 /** How many columns a `level` shows. */

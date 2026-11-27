@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { defineBuiltins, type BuiltinElement } from "../src/builtins.ts";
 import { animate } from "../src/components/base.ts";
+import { Wheel } from "../src/components/wheel.ts";
 
 defineBuiltins();
 
@@ -202,6 +203,105 @@ describe("rich-text", () => {
     const link = el.querySelector("a")!;
     expect(link.hasAttribute("href")).toBe(false);
     expect(link.textContent).toBe("a\u00a0\u00a0b");
+  });
+});
+
+describe("wheel", () => {
+  /** Frames run only when the test asks, each far enough ahead to finish its animation. */
+  function frames() {
+    let queue: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => queue.push(fn));
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      queue[id - 1] = () => {};
+    });
+    return () => {
+      while (queue.length) {
+        const run = queue;
+        queue = [];
+        for (const fn of run) fn(performance.now() + 1000);
+      }
+    };
+  }
+  function wheel() {
+    const surface = document.createElement("div");
+    const content = document.createElement("div");
+    surface.append(content);
+    document.body.append(surface);
+    const settled: number[] = [];
+    const starts: number[] = [];
+    const w = new Wheel(surface, content, {
+      pickStart: () => starts.push(1),
+      settle: (index) => settled.push(index),
+    });
+    w.layout(34, 10, 34);
+    const step = (deltaY: number) =>
+      surface.dispatchEvent(new WheelEvent("wheel", { deltaY, cancelable: true }));
+    return { w, surface, content, settled, starts, step };
+  }
+
+  test("a drag that starts while the wheel glides goes on from the row it shows", () => {
+    const run = frames();
+    const { w, surface, content, settled, starts, step } = wheel();
+    w.setIndex(4);
+    step(30);
+    surface.dispatchEvent(new PointerEvent("pointerdown", { clientY: 100, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 90 }));
+    expect(content.style.transform).toBe("translateY(-146px)");
+    window.dispatchEvent(new PointerEvent("pointerup", { clientY: 90 }));
+    run();
+    expect(settled).toEqual([4]);
+    expect(starts).toHaveLength(1);
+  });
+
+  test("an index set while the wheel glides applies once it stops", () => {
+    const run = frames();
+    const { w, content, settled, step } = wheel();
+    step(30);
+    w.setIndex(3);
+    run();
+    expect(settled).toEqual([1]);
+    expect(w.index).toBe(3);
+    expect(content.style.transform).toBe("translateY(-102px)");
+  });
+
+  test("a glide toward a row that is removed stops at the last row left", () => {
+    const run = frames();
+    const { w, settled, step } = wheel();
+    w.setIndex(4);
+    step(30);
+    w.layout(34, 2, 34);
+    run();
+    expect(settled.at(-1)).toBe(1);
+    expect(w.index).toBe(1);
+  });
+
+  test("with immediate-change, the last change of a picker-view is where its columns stop", async () => {
+    const run = frames();
+    const view = document.createElement("wx-picker-view") as unknown as BuiltinElement;
+    view.omrUpdate({ "immediate-change": true });
+    const columns = [0, 1].map(() => {
+      const column = document.createElement("wx-picker-view-column") as unknown as BuiltinElement;
+      column.omrUpdate({});
+      column.append(
+        ...["a", "b", "c"].map((text) =>
+          Object.assign(document.createElement("div"), { textContent: text }),
+        ),
+      );
+      view.append(column);
+      return column;
+    });
+    document.body.append(view);
+    await settle();
+    const changes: unknown[] = [];
+    view.addEventListener("omr-event", (event) => {
+      const { name, detail } = (event as CustomEvent<{ name: string; detail: { value: unknown } }>)
+        .detail;
+      if (name === "change") changes.push(detail.value);
+    });
+    for (const column of columns)
+      column.dispatchEvent(new WheelEvent("wheel", { deltaY: 30, cancelable: true }));
+    run();
+    expect(changes.at(-1)).toEqual([1, 1]);
   });
 });
 

@@ -20,9 +20,13 @@ export class Wheel {
   private offset = 0;
   private picking = false;
   private stop = () => {};
+  /** A finger is moving the wheel; `picking` also covers the glide that follows. */
+  private dragging = false;
   private wheelDelta = 0;
-  /** The index the wheel is moving to. */
-  private target = 0;
+  /** The index the wheel is moving to, or is at when it stands still. */
+  target = 0;
+  /** An index set while the user moved the wheel, applied once it stops. */
+  private requested?: number;
 
   private readonly content: HTMLElement;
   private readonly events: WheelEvents;
@@ -35,14 +39,17 @@ export class Wheel {
       start: () => this.count > 0,
       accept: (dx, dy) => Math.abs(dy) >= Math.abs(dx),
       move: (_, dy) => {
-        if (!this.picking) {
+        if (!this.dragging) {
+          // A drag that starts while the wheel still glides takes over from where it shows
           this.stop();
           base = this.offset;
-          this.begin();
+          this.dragging = true;
+          if (!this.picking) this.begin();
         }
         this.place(this.rubber(base + dy));
       },
       end: (_, __, velocity) => {
+        this.dragging = false;
         // Keep gliding for a moment, as a flick does
         const projected = this.offset + velocity.y * 160;
         this.finish(this.indexAt(projected));
@@ -74,17 +81,27 @@ export class Wheel {
 
   /** Measures again: the height of one item, how many there are and the height of the wheel. */
   layout(itemHeight: number, count: number, height: number): void {
-    this.itemHeight = itemHeight > 0 ? itemHeight : 34;
+    itemHeight = itemHeight > 0 ? itemHeight : 34;
+    const padding = Math.max(0, (height - itemHeight) / 2);
+    const changed =
+      itemHeight !== this.itemHeight || count !== this.count || padding !== this.padding;
+    this.itemHeight = itemHeight;
     this.count = count;
-    this.padding = Math.max(0, (height - this.itemHeight) / 2);
+    this.padding = padding;
     this.content.style.paddingTop = `${this.padding}px`;
     this.content.style.paddingBottom = `${this.padding}px`;
     if (!this.picking) this.setIndex(this.index);
+    // A glide toward a row that moved or no longer exists heads for the row it can stop at now
+    else if (changed && !this.dragging && count > 0) this.finish(this.clamp(this.target));
   }
 
-  /** Moves to an item without events, as setting `value` does. */
+  /** Moves to an item without events, as setting `value` does; while the user moves the wheel, once it stops. */
   setIndex(index: number, animated = false): void {
-    if (this.picking) return;
+    if (this.picking) {
+      this.requested = index;
+      return;
+    }
+    this.requested = undefined;
     this.stop();
     this.index = this.target = this.clamp(index);
     const to = this.offsetOf(this.index);
@@ -115,6 +132,7 @@ export class Wheel {
       this.index = index;
       this.events.settle(index);
       this.events.pickEnd?.();
+      if (this.requested !== undefined && !this.picking) this.setIndex(this.requested);
     });
   }
 

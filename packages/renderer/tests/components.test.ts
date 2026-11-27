@@ -17,6 +17,7 @@ import {
   regionPathOf,
   regionResult,
   setStreetsUrl,
+  streetsLoading,
 } from "../src/components/region.ts";
 
 describe("text", () => {
@@ -129,6 +130,31 @@ describe("region picker", () => {
         code: ["110000", "110100", "110101", "110101002"],
         postcode: "100000",
       });
+    } finally {
+      setStreetsUrl(undefined);
+      vi.unstubAllGlobals();
+    }
+  });
+  test("a failed street load is asked again later, and is not loading once it failed", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", async () =>
+      fail
+        ? new Response("", { status: 503 })
+        : new Response(JSON.stringify([["120101001", "劝业场街道"]])),
+    );
+    setStreetsUrl("/streets");
+    try {
+      const value = ["天津市", "天津市", "和平区"];
+      const path = regionPathOf(value, 4);
+      expect(streetsLoading(path, 4)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(streetsLoading(path, 4)).toBe(false);
+      fail = false;
+      let loaded = 0;
+      regionColumns(path, 4, "", () => loaded++);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(loaded).toBe(1);
+      expect(regionColumns(path, 4).columns[3]).toEqual(["劝业场街道"]);
     } finally {
       setStreetsUrl(undefined);
       vi.unstubAllGlobals();

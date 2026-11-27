@@ -112,7 +112,10 @@ export class WxPickerView extends Builtin {
     // Without immediate-change, change waits until the wheel stops
     if (released !== this.flag("immediate-change")) return;
     const columns = this.columns();
-    const value = columns.map((other) => (other === column ? index : other.wheel.index));
+    // A released column reports where the others are heading, so the last change matches where all stop
+    const value = columns.map((other) =>
+      other === column ? index : released ? other.wheel.target : other.wheel.index,
+    );
     if (toText(value) === toText(this.current)) return;
     this.current = value;
     emit(this, "change", { value });

@@ -8,7 +8,13 @@ import {
   timeColumns,
   type DateFields,
 } from "./date-columns.ts";
-import { regionColumns, regionDepth, regionPathOf, regionResult } from "./region.ts";
+import {
+  regionColumns,
+  regionDepth,
+  regionPathOf,
+  regionResult,
+  streetsLoading,
+} from "./region.ts";
 import { Wheel } from "./wheel.ts";
 
 const ROW_HEIGHT = 48;
@@ -21,6 +27,8 @@ interface Model {
   selected: number[];
   select(column: number, index: number): void;
   detail(): Record<string, unknown>;
+  /** Whether the selection is still loading, as a district's streets do; confirming waits. */
+  loading?(): boolean;
 }
 
 interface SheetHandlers {
@@ -174,6 +182,7 @@ export class WxPicker extends Builtin {
         emit(this, "cancel");
       },
       confirm: () => {
+        if (this.model!.loading?.()) return;
         const detail = this.model!.detail();
         this.close();
         this.value = detail.value;
@@ -371,6 +380,7 @@ export class WxPicker extends Builtin {
         model.selected = state.path;
       },
       detail: () => regionResult(state.path, depth, custom),
+      loading: () => streetsLoading(state.path, depth, custom),
     };
     return model;
   }
