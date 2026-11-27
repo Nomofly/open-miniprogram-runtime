@@ -414,7 +414,7 @@ describe("NodesRef.context", () => {
     view(1, {
       type: "queryResult",
       queryId: query.queryId,
-      results: [{ context: { tag: "editor", id: "editor", scopeNodeId: 0 } }],
+      results: [{ context: { tag: "editor", id: "editor", scopeNodeId: 0, nodeKey: 3 } }],
     });
     await settle();
     expect(log()).toEqual([["context"]]);
@@ -422,8 +422,9 @@ describe("NodesRef.context", () => {
     tap("format");
     await settle();
     const [format, image] = toView("callBuiltin");
+    // The call reaches the node the query found, by its key
     expect(format).toMatchObject({
-      target: { tag: "editor", id: "editor", scopeNodeId: 0 },
+      target: { tag: "editor", id: "editor", scopeNodeId: 0, nodeKey: 3 },
       method: "format",
       args: ["header", "H2"],
     });

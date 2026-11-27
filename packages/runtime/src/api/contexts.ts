@@ -182,7 +182,8 @@ const finite = (value: unknown, fallback: number) => {
 };
 
 /** The page and template a context works in. */
-type Scope = () => { webviewId: number; scopeNodeId: number };
+/** Where a context's component is; `nodeKey` names the very element a selector query found. */
+type Scope = () => { webviewId: number; scopeNodeId: number; nodeKey?: number };
 
 export function createContextApis(ctx: ApiContext) {
   const { host } = ctx;
@@ -220,11 +221,11 @@ export function createContextApis(ctx: ApiContext) {
   ) => {
     const call = (method: string, args: unknown[]) =>
       callbackApi(method, async () => {
-        const { webviewId, scopeNodeId } = scope();
+        const { webviewId, scopeNodeId, nodeKey } = scope();
         try {
           const result = await host.callBuiltin(
             webviewId,
-            { tag, id, scopeNodeId },
+            { tag, id, scopeNodeId, ...(nodeKey !== undefined && { nodeKey }) },
             method,
             args.map(plain),
           );
@@ -439,7 +440,12 @@ export function createContextApis(ctx: ApiContext) {
    */
   const contextOf = (webviewId: number, node: ContextNode | null, component?: object) => {
     if (!node) return undefined;
-    const scope: Scope = () => ({ webviewId, scopeNodeId: node.scopeNodeId });
+    // The context reaches the node the query found, even among others without an id
+    const scope: Scope = () => ({
+      webviewId,
+      scopeNodeId: node.scopeNodeId,
+      ...(node.nodeKey !== undefined && { nodeKey: node.nodeKey }),
+    });
     const id = node.id ?? "";
     switch (node.tag) {
       case "editor":
