@@ -237,6 +237,19 @@ describe("<map>", () => {
     }
   });
 
+  test("one include-point with a new scale in the same update lands in the middle of the padded box", async () => {
+    const map = mountMap({ ...CENTER, scale: 5 });
+    await settle();
+    const point = { latitude: CENTER.latitude + 0.01, longitude: CENTER.longitude + 0.01 };
+    map.omrUpdate({ ...CENTER, scale: 16, "include-points": [point] });
+    await settle(450);
+    expect(map.omrCall!("getScale", [{}])).toEqual({ scale: 16 });
+    // The padding [40, 30, 30, 30] leaves x 30 to 270 and y 40 to 120 of the 300×150 map
+    const { x, y } = map.omrCall!("toScreenLocation", [point]) as { x: number; y: number };
+    expect(x).toBeCloseTo(150, 0);
+    expect(y).toBeCloseTo(80, 0);
+  });
+
   test("include-points that arrive while the map turns fit at, and finish, the rotation it turns to", async () => {
     const map = mountMap({ ...CENTER, scale: 5 });
     await settle();

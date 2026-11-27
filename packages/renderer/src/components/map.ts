@@ -374,7 +374,7 @@ export class WxMap extends Builtin {
       if (!this.isConnected) this.pendingFit = include;
       // The fit sets the center and scale; the rest of the update's camera still applies
       else {
-        const fit = this.fit(include, INCLUDE_PADDING, target.rotate);
+        const fit = this.fit(include, INCLUDE_PADDING, target.rotate, target.scale);
         void this.moveTo({ ...target, ...fit });
       }
     }
@@ -469,17 +469,18 @@ export class WxMap extends Builtin {
     points: LatLng[],
     padding: number[],
     rotate = this.heading?.rotate ?? this.camera.rotate,
+    current = this.heading?.scale ?? this.camera.scale,
   ): Partial<Camera> {
     const { width, height } = this.size();
-    const { center, scale } = fitPoints(points, width, height, {
+    const { center, scale = this.clampScale(current) } = fitPoints(points, width, height, {
       padding,
       limit: (value) => this.clampScale(Math.floor(value)),
       rotate,
       origin: this.origin(),
-      scale: this.heading?.scale ?? this.camera.scale,
+      scale: this.clampScale(current),
     });
-    // The fit holds at this rotation, so a move that replaces a turn ends there
-    return scale === undefined ? { center, rotate } : { center, scale, rotate };
+    // The fit holds at this rotation and scale (the map's own for points in one place), so the move ends there
+    return { center, scale, rotate };
   }
 
   // Moving the map
