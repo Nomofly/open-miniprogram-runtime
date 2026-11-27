@@ -44,13 +44,22 @@ const fromThisMachine = (req: IncomingMessage) =>
 /**
  * Whether a request comes from the simulator's own pages, not from another site
  * open in a browser on this machine. Browsers mark requests from other sites,
- * including other ports of `localhost`, with `Sec-Fetch-Site`. A POST must also
- * carry the content type its caller sends, which a cross-site form or a
- * `no-cors` fetch cannot send without a CORS preflight.
+ * including other ports of `localhost`, with `Sec-Fetch-Site`. Browsers without
+ * it still send `Origin`, which must be the simulator's own: Vite answers CORS
+ * preflights from any `localhost` port, such as a web-view's proxy. A POST must
+ * also carry the content type its caller sends, which a cross-site form or a
+ * `no-cors` fetch cannot send without a preflight.
  */
 const fromSimulator = (req: IncomingMessage, contentType?: string) => {
   const site = req.headers["sec-fetch-site"];
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
+  const origin = req.headers.origin;
+  if (
+    origin !== undefined &&
+    (!URL.canParse(origin) || new URL(origin).host !== req.headers.host?.toLowerCase())
+  ) {
+    return false;
+  }
   return (
     contentType === undefined ||
     req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() === contentType

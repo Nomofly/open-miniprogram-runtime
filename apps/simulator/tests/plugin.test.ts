@@ -63,11 +63,28 @@ test("only the simulator's own pages reach the request proxy and the file system
     headers: { "sec-fetch-site": "cross-site" },
   });
   expect(webView.status).toBe(403);
+  // Vite grants another localhost port, such as a web-view's proxy, a CORS preflight; an older
+  // browser without Sec-Fetch-Site then sends the JSON with only its Origin to tell
+  const preflight = await fetch(`${base}/__omr/request`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "http://localhost:9999",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type",
+    },
+  });
+  expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:9999");
+  const otherPort = await post(
+    "/__omr/request",
+    { "content-type": "application/json", origin: "http://localhost:9999" },
+    request,
+  );
+  expect(otherPort.status).toBe(403);
   expect(upstream).toEqual([]);
 
   const own = await post(
     "/__omr/request",
-    { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    { "content-type": "application/json", "sec-fetch-site": "same-origin", origin: base },
     request,
   );
   expect(own.status).toBe(200);
