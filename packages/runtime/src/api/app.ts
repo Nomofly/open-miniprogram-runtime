@@ -304,24 +304,32 @@ export function createAppApis(ctx: ApiContext): { apis: Record<string, unknown>;
     loadBuiltInFontFace: asyncApi("loadBuiltInFontFace", async () => ({})),
 
     // Interaction
-    enableAlertBeforeUnload: asyncApi(
-      "enableAlertBeforeUnload",
-      async (options) => {
-        if (typeof options.message !== "string")
-          throw new Error("parameter.message should be String");
-        alerts.set(currentWebview(), options.message);
-        return {};
-      },
-      { promise: false },
-    ),
-    disableAlertBeforeUnload: asyncApi(
-      "disableAlertBeforeUnload",
-      async () => {
-        alerts.delete(currentWebview());
-        return {};
-      },
-      { promise: false },
-    ),
+    // The alert belongs to the page that asked for it, which need not be the page on top
+    enableAlertBeforeUnload: (options?: Options) => {
+      const webviewId = host.callerWebviewId();
+      return asyncApi(
+        "enableAlertBeforeUnload",
+        async (options) => {
+          if (typeof options.message !== "string")
+            throw new Error("parameter.message should be String");
+          if (webviewId === undefined) throw new Error("no page is open");
+          alerts.set(webviewId, options.message);
+          return {};
+        },
+        { promise: false },
+      )(options);
+    },
+    disableAlertBeforeUnload: (options?: Options) => {
+      const webviewId = host.callerWebviewId();
+      return asyncApi(
+        "disableAlertBeforeUnload",
+        async () => {
+          if (webviewId !== undefined) alerts.delete(webviewId);
+          return {};
+        },
+        { promise: false },
+      )(options);
+    },
 
     // Keyboard: the simulated device has no on-screen keyboard
     hideKeyboard: asyncApi("hideKeyboard", async () => {

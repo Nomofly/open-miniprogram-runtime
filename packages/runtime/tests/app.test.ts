@@ -279,6 +279,35 @@ describe("app APIs", () => {
     expect(modals()).toHaveLength(count);
   });
 
+  test("an unload alert a page enables while another page is on top belongs to that page", async () => {
+    const { sent, handle, view, render, stack } = boot(
+      {
+        "app.js": "App({ log: [] });",
+        "pages/x/x.js": "Page({});",
+        "pages/a/a.js": `Page({ onLoad() { wx.enableAlertBeforeUnload({ message: "A 还没保存" }); } });`,
+        "pages/b/b.js": "Page({});",
+      },
+      { pages: ["pages/x/x", "pages/a/a", "pages/b/b"] },
+    );
+    render(1);
+    wx().navigateTo({ url: "/pages/a/a" });
+    await settle();
+    // b opens over a before a's view is ready, so a's onLoad runs while b is on top
+    wx().navigateTo({ url: "/pages/b/b" });
+    await settle();
+    render(3);
+    view(2, { type: "ready" });
+    await settle();
+    const modals = () =>
+      sent.filter((message) => message.type === "ui" && message.name === "showModal");
+    handle({ type: "navigateBack" });
+    await settle();
+    expect(modals()).toHaveLength(0);
+    expect(stack()).toEqual(["pages/x/x", "pages/a/a"]);
+    handle({ type: "navigateBack" });
+    expect(modals().at(-1)).toMatchObject({ args: { content: "A 还没保存" } });
+  });
+
   test("base64 conversions keep every byte, and batch storage reads what it wrote", async () => {
     boot({ "app.js": "App({ log: [] });", "pages/a/a.js": "Page({});" }, { pages: ["pages/a/a"] });
     const bytes = new Uint8Array([0, 0x7f, 0x80, 0xff, 0xe4, 0xb8, 0xad]);

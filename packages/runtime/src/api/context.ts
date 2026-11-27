@@ -65,6 +65,8 @@ export interface WxHost {
   /** Performs a navigation; for `navigateTo`, returns the opener's event channel. */
   navigate(openType: string, options: { url?: string; delta?: number; events?: object }): unknown;
   topWebviewId(): number | undefined;
+  /** The page whose code is calling now, such as a page's onLoad while another page is on top; else the top page. */
+  callerWebviewId(): number | undefined;
   scopeOf(instance: object): { webviewId: number; nodeId: number } | undefined;
   query(webviewId: number, requests: SelectorQueryRequest[]): Promise<unknown[]>;
   /** Calls a method of a built-in component in a page; rejects with the view's reason, or when the page is gone. */

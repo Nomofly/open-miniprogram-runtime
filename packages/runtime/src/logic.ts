@@ -153,6 +153,20 @@ export function startLogic(
   const pageDefs = new Map<string, Definition>();
   const componentDefs = new Map<string, Definition>();
   const metas = new WeakMap<object, Meta>();
+  /** The page whose hook, lifetime or handler is running now, if any. */
+  let runningPage: number | undefined;
+  /** Runs page or component code, so APIs it calls know which page they come from. */
+  const runAs = <T>(target: object | undefined, run: () => T): T => {
+    const meta = target ? metas.get(target) : undefined;
+    if (!meta) return run();
+    const outer = runningPage;
+    runningPage = meta.page.webviewId;
+    try {
+      return run();
+    } finally {
+      runningPage = outer;
+    }
+  };
   const pages = new Map<number, PageRecord>();
   let stack: PageRecord[] = [];
   let nextWebviewId = 1;
@@ -286,7 +300,7 @@ export function startLogic(
     const fn = target?.[name];
     if (typeof fn !== "function") return undefined;
     try {
-      return fn.apply(target, args);
+      return runAs(target, () => fn.apply(target, args));
     } catch (error) {
       reportError(error, `${target?.is ?? "App"}.${name}`, target);
       return undefined;
@@ -299,7 +313,7 @@ export function startLogic(
   ) => {
     for (const fn of comp.def.lifetimes[name] ?? []) {
       try {
-        fn.apply(comp.instance, args);
+        runAs(comp.instance, () => fn.apply(comp.instance, args));
       } catch (error) {
         reportError(error, `${comp.instance.is}.lifetimes.${name}`, comp.instance);
       }
@@ -463,7 +477,7 @@ export function startLogic(
       return undefined;
     }
     try {
-      return fn.call(owner, event);
+      return runAs(owner, () => fn.call(owner, event));
     } catch (error) {
       reportError(error, `${owner.is}.${handler}`, owner);
       return undefined;
@@ -1756,6 +1770,7 @@ export function startLogic(
       ui: shellUi,
       navigate: (openType, options) => navigate(openType, options),
       topWebviewId: () => stack[stack.length - 1]?.webviewId,
+      callerWebviewId: () => runningPage ?? stack[stack.length - 1]?.webviewId,
       scopeOf: (instance) => {
         const meta = metas.get(instance);
         return meta ? { webviewId: meta.page.webviewId, nodeId: meta.nodeId } : undefined;
