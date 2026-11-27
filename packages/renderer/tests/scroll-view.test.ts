@@ -247,3 +247,43 @@ test("refresher-triggered written false closes the refresher at once; a render t
   await wait(400);
   expect(restores()).toBe(2);
 });
+
+test("in a template whose data mixes fields, a write of another field leaves the refresh open; writing triggered closes it", async () => {
+  const wxml = `<template name="list"><scroll-view scroll-y refresher-enabled refresher-triggered="{{triggered}}" bindrefresherrestore="onRestore">{{n}}</scroll-view></template>
+<template is="list" data="{{triggered: triggered, n: n}}" />`;
+  const bundle = {
+    route: "pages/a/a",
+    page: { path: "pages/a/a", template: "pages/a/a.wxml", usingComponents: {}, prefix: "" },
+    components: {},
+    files: { "pages/a/a.wxml": compileWxml(wxml, "pages/a/a.wxml") },
+    wxs: {},
+    css: "",
+    window: {},
+  } as unknown as WebviewBundle;
+  const posted: ViewToLogic[] = [];
+  const handle = startView({
+    bundle,
+    windowWidth: 375,
+    assetBase: "/files/",
+    styleV2: false,
+    post: (message) => posted.push(message),
+  });
+  handle({ type: "init", data: { triggered: false, n: 0 }, seq: 1 });
+  await settle();
+  const restores = () =>
+    posted.filter((message) => message.type === "event" && message.handler === "onRestore").length;
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const list = document.querySelector("wx-scroll-view") as BuiltinElement;
+  let seq = 1;
+  const setData = (patch: Record<string, unknown>) =>
+    handle({ type: "setData", nodeId: 0, patch, seq: ++seq });
+
+  void list.omrCall!("triggerRefresh", [{}]);
+  await wait(350);
+  setData({ n: 1 });
+  await wait(400);
+  expect(restores()).toBe(0);
+  setData({ triggered: false });
+  await wait(400);
+  expect(restores()).toBe(1);
+});
