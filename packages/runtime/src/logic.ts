@@ -323,7 +323,7 @@ export function startLogic(
     for (const comp of record.components.values()) {
       for (const fn of comp.def.pageLifetimes[name] ?? []) {
         try {
-          fn.apply(comp.instance, args);
+          runAs(comp.instance, () => fn.apply(comp.instance, args));
         } catch (error) {
           reportError(error, `${comp.path}.pageLifetimes.${name}`, comp.instance);
         }

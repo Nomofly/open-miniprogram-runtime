@@ -308,6 +308,47 @@ describe("app APIs", () => {
     expect(modals().at(-1)).toMatchObject({ args: { content: "A 还没保存" } });
   });
 
+  test("an unload alert a covered page's component enables in its resize lifetime belongs to that page", async () => {
+    const { sent, handle, view, render, stack } = boot(
+      {
+        "app.js": "App({ log: [] });",
+        "pages/x/x.js": "Page({});",
+        "pages/a/a.js": "Page({});",
+        "pages/b/b.js": "Page({});",
+        "components/guard/guard.js": `Component({
+          pageLifetimes: { resize() { wx.enableAlertBeforeUnload({ message: "A 还没保存" }); } },
+        });`,
+      },
+      { pages: ["pages/x/x", "pages/a/a", "pages/b/b"] },
+    );
+    render(1);
+    wx().navigateTo({ url: "/pages/a/a" });
+    await settle();
+    render(2);
+    view(2, {
+      type: "attach",
+      nodeId: 1,
+      ownerId: 0,
+      path: "components/guard/guard",
+      props: {},
+      listeners: {},
+      id: "",
+      dataset: {},
+    });
+    wx().navigateTo({ url: "/pages/b/b" });
+    await settle();
+    render(3);
+    view(2, { type: "resize", size: { windowWidth: 400, windowHeight: 700 } });
+    const modals = () =>
+      sent.filter((message) => message.type === "ui" && message.name === "showModal");
+    handle({ type: "navigateBack" });
+    await settle();
+    expect(modals()).toHaveLength(0);
+    expect(stack()).toEqual(["pages/x/x", "pages/a/a"]);
+    handle({ type: "navigateBack" });
+    expect(modals().at(-1)).toMatchObject({ args: { content: "A 还没保存" } });
+  });
+
   test("base64 conversions keep every byte, and batch storage reads what it wrote", async () => {
     boot({ "app.js": "App({ log: [] });", "pages/a/a.js": "Page({});" }, { pages: ["pages/a/a"] });
     const bytes = new Uint8Array([0, 0x7f, 0x80, 0xff, 0xe4, 0xb8, 0xad]);
