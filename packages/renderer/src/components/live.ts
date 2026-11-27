@@ -118,7 +118,8 @@ export class WxLivePlayer extends LiveStream {
       const first = this.src === undefined;
       this.src = src;
       // A new address starts over; autoplay plays it, as does a player that was playing
-      const wasPlaying = this.state !== "idle";
+      // or had a play queued for the app's return
+      const wasPlaying = this.state !== "idle" || this.playOnShow;
       this.stop();
       if (src && (this.flag("autoplay") || (!first && wasPlaying))) this.play();
     }
@@ -298,6 +299,10 @@ export class WxLivePusher extends LiveStream {
   private previewing = false;
   private state: "idle" | "pushing" | "paused" = "idle";
   private suspended = false;
+  /** Whether the Mini Program is in the background. */
+  private background = false;
+  /** Authorization that arrived in the background: its preview (and autopush) start on return. */
+  private deferred = false;
   /** Set by `switchCamera`, which overrides `device-position`. */
   private position?: string;
   private torch = false;
@@ -327,6 +332,7 @@ export class WxLivePusher extends LiveStream {
     if (!mounted) {
       this.auth = undefined;
       this.previewing = false;
+      this.deferred = false;
       this.state = "idle";
     }
     document.dispatchEvent(
@@ -339,6 +345,12 @@ export class WxLivePusher extends LiveStream {
     this.auth = state;
     if (state.errCode !== undefined) {
       emit(this, "error", { errMsg: state.errMsg, errCode: state.errCode });
+      this.render();
+      return;
+    }
+    // WeChat stops the camera in the background, so nothing starts until the app returns
+    if (this.background) {
+      this.deferred = true;
       this.render();
       return;
     }
@@ -443,6 +455,14 @@ export class WxLivePusher extends LiveStream {
   }
   omrPageVisibility(visible: boolean, background: boolean): void {
     if (!background) return;
+    this.background = !visible;
+    if (visible && this.deferred) {
+      this.deferred = false;
+      if (this.allowed() && this.mounted) {
+        this.startPreview();
+        if (this.flag("autopush")) this.start();
+      }
+    }
     // Returning clears the suspension even when the preview stopped in the background
     if (!visible && !this.suspended && this.previewing) {
       this.suspended = true;

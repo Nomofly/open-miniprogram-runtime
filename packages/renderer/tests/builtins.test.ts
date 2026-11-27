@@ -354,6 +354,41 @@ describe("live", () => {
     }
   });
 
+  test("a play queued in the background survives two source changes and plays the last one on return", () => {
+    vi.useFakeTimers();
+    try {
+      const player = mount("wx-live-player", { src: "rtmp://a/live" }) as Live;
+      void player.omrCall!("play", []);
+      vi.advanceTimersByTime(2000);
+      player.omrPageVisibility(false, true);
+      player.omrUpdate({ src: "rtmp://b/live" });
+      player.omrUpdate({ src: "rtmp://c/live" });
+      const fired = codes(player);
+      player.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([2001, 2002, 2008, 2026, 2003, 2004]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a pusher authorized while the app is in the background starts its preview and push only on return", () => {
+    vi.useFakeTimers();
+    try {
+      const pusher = mount("wx-live-pusher", { url: "rtmp://a/push", autopush: true }) as Live;
+      const fired = codes(pusher);
+      pusher.omrPageVisibility(false, true);
+      pusher.omrLivePusherState({});
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([]);
+      pusher.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toContain(1001);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a pusher whose preview stopped in the background can start once the app returns", () => {
     vi.useFakeTimers();
     try {
