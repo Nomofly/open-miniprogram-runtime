@@ -108,7 +108,11 @@ const eventApis = (on: string, off: string) => {
   };
 };
 
-export function createDeviceApis(ctx: ApiContext): Record<string, unknown> {
+export function createDeviceApis(ctx: ApiContext): {
+  apis: Record<string, unknown>;
+  /** Puts text on the simulated clipboard, as WeChat's own menus do without the privacy check. */
+  copy(text: string): void;
+} {
   const { host } = ctx;
   const { manifest } = host;
   const config = manifest.config;
@@ -214,7 +218,7 @@ export function createDeviceApis(ctx: ApiContext): Record<string, unknown> {
   const appAuthorized = (scope: string) =>
     config.auth?.authSetting?.[scope] === false ? "denied" : "authorized";
 
-  return {
+  const apis = {
     // Clipboard
     setClipboardData: asyncApi("setClipboardData", async (options) => {
       requireParam(options, "data", "String");
@@ -522,6 +526,12 @@ export function createDeviceApis(ctx: ApiContext): Record<string, unknown> {
       requireParam(options, "path", "String");
       return {};
     }),
+  };
+  return {
+    apis,
+    copy: (text) => {
+      clipboard = text;
+    },
   };
 }
 

@@ -839,7 +839,8 @@ export function startLogic(
   };
 
   const showPage = (record: PageRecord | undefined, background = false) => {
-    if (!record?.instance || record.shown) return;
+    // In the background a page waits for appShow, which shows the top page
+    if (!record?.instance || record.shown || inBackground) return;
     record.shown = true;
     sendView(record, { type: "pageVisibility", visible: true, ...(background && { background }) });
     callHook(record.instance, "onShow");
@@ -930,6 +931,8 @@ export function startLogic(
       for (const comp of record.components.values()) callLifetime(comp, "detached");
     }
     record.components.clear();
+    // As a detach does: the links of the page's components end, with their unlinked callbacks
+    updateRelations(record);
     pages.delete(record.webviewId);
     wxApi?.releasePage(record.webviewId);
     if (record.instance) wxApi?.app.emit("AfterPageUnload", unloadEvent);
@@ -1053,7 +1056,11 @@ export function startLogic(
         const existing = [...pages.values()].find((record) => record.route === route);
         stack = [existing ?? open(route, {})];
         showPage(existing);
-        if (existing) finishRoute(event, existing);
+        if (existing) {
+          // A rewrite may have chosen another tab than the one whose ID the route began with
+          event.webviewId = existing.webviewId;
+          finishRoute(event, existing);
+        }
         break;
       }
       case "reLaunch": {
@@ -1264,7 +1271,8 @@ export function startLogic(
         "复制链接",
         () => {
           flushWebViewMessages(record);
-          // WeChat copies the link itself, without the Mini Program's privacy check
+          // WeChat copies the link the page shows now, without the Mini Program's privacy check
+          if (record.webView) wxApi?.copyToClipboard(record.webView.url);
           void shellUi("showToast", {
             title: "已复制链接",
             icon: "success",
@@ -1380,7 +1388,8 @@ export function startLogic(
     // The custom tab bar was created with the page; it is attached as it is
     const early =
       message.ownerId === 0 && message.path === CUSTOM_TAB_BAR ? record.tabBar : undefined;
-    record.tabBar = undefined;
+    // Other components may attach first; the tab bar waits for its own attach
+    if (early) record.tabBar = undefined;
     const comp = early ?? createComponent(record, message.nodeId, message.path, message.ownerId);
     const { instance, def } = comp;
     comp.nodeId = message.nodeId;

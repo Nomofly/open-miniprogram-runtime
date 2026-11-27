@@ -885,6 +885,24 @@ describe("logic layer", () => {
     ]);
   });
 
+  test("a page whose view gets ready while the app is in the background shows only when the app returns", () => {
+    const { handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          onLoad() { getApp().log.push("onLoad"); },
+          onShow() { getApp().log.push("onShow"); },
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    handle({ type: "appHide" });
+    view(1, { type: "ready" });
+    expect(log()).toEqual(["onLoad"]);
+    handle({ type: "appShow" });
+    expect(log()).toEqual(["onLoad", "onShow"]);
+  });
+
   test("a live-pusher needs the camera and the microphone, and the background reaches live components", async () => {
     const { sent, handle, view } = boot(
       { "app.js": APP, "pages/index/index.js": `Page({});` },
@@ -1170,11 +1188,12 @@ describe("logic layer", () => {
     expect(page.selectComponent("#o").selectComponent("#i4").selectOwnerComponent().id).toBe("o");
   });
 
-  test("relations link parents and children, and built-in behaviors and definition filters apply", () => {
+  test("relations link parents and children, and built-in behaviors and definition filters apply", async () => {
     const { sent, view, log } = boot(
       {
         "app.js": APP,
         "pages/index/index.js": "Page({});",
+        "pages/other/other.js": "Page({});",
         "components/list/list.js": `Component({
           behaviors: ["wx://component-export"],
           relations: { "../item/item": {
@@ -1194,7 +1213,7 @@ describe("logic layer", () => {
             methods: { marked() { return this.hasBehavior(marker); } },
           });`,
       },
-      { pages: ["pages/index/index"] },
+      { pages: ["pages/index/index", "pages/other/other"] },
     );
     view(1, { type: "ready" });
     attachAll(view, [
@@ -1233,6 +1252,12 @@ describe("logic layer", () => {
     view(1, { type: "detach", nodeIds: [3] });
     expect(log()).toEqual(["list unlinked i2"]);
     expect(list.getRelationNodes("../item/item")).toHaveLength(1);
+
+    // Closing the whole page ends the links that are left
+    (globalThis as any).wx.redirectTo({ url: "/pages/other/other" });
+    await settle();
+    expect(log()).toEqual(["list unlinked i2", "list unlinked i1"]);
+    expect(list.getRelationNodes("../item/item")).toHaveLength(0);
   });
 
   test("pure data fields stay in the logic layer, and routers resolve against the component's path", async () => {
@@ -1299,6 +1324,7 @@ describe("logic layer", () => {
           data: { selected: 0 },
           lifetimes: { attached() { getApp().log.push("attached"); } },
         });`,
+        "components/card/card.js": `Component({});`,
       },
       {
         pages: ["pages/index/index"],
@@ -1306,8 +1332,15 @@ describe("logic layer", () => {
       },
     );
     view(1, { type: "ready" });
-    attachAll(view, [[4, 0, "custom-tab-bar/index", ""]]);
-    expect(toView(sent, "componentInit")).toMatchObject([{ nodeId: 4, data: { selected: 1 } }]);
+    // A component of the page may attach before the tab bar does
+    attachAll(view, [
+      [3, 0, "components/card/card", ""],
+      [4, 0, "custom-tab-bar/index", ""],
+    ]);
+    expect(toView(sent, "componentInit")).toMatchObject([
+      { nodeId: 3 },
+      { nodeId: 4, data: { selected: 1 } },
+    ]);
     expect(log()).toEqual(["attached"]);
     const page = currentPage();
     page.getTabBar().setData({ selected: 0 });

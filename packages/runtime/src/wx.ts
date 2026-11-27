@@ -1085,6 +1085,7 @@ export function createWx(host: WxHost) {
   const observerApis = createObserverApis(ctx);
   const contextApis = createContextApis(ctx);
   const voipApis = createVoipApis(ctx, user.openid);
+  const deviceApis = createDeviceApis(ctx);
   Object.assign(
     wx,
     appApis.apis,
@@ -1092,7 +1093,7 @@ export function createWx(host: WxHost) {
     createNetworkApis(ctx),
     createInterfaceApis(ctx),
     canvasApis.apis,
-    createDeviceApis(ctx),
+    deviceApis.apis,
     createMediaApis(ctx),
     contextApis.apis,
     voipApis.apis,
@@ -1126,6 +1127,7 @@ export function createWx(host: WxHost) {
     livePusherMounted,
     voipRoomMounted: voipApis.voipRoomMounted,
     interruptVoip: voipApis.interrupt,
+    copyToClipboard: deviceApis.copy,
     officialAccountState,
     observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
       observerApis.receive(...args),

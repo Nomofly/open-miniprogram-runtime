@@ -166,6 +166,41 @@ describe("route listeners", () => {
     });
   });
 
+  test("a switchTab rewritten to another cached tab reports that tab's webviewId", async () => {
+    const { log, render } = boot(
+      {
+        "app.js": `App({ log: [], onLaunch() {
+          wx.onBeforeAppRoute((res) => {
+            if (res.openType === "switchTab" && getApp().rewrite) wx.rewriteRoute({ url: "/pages/b/b" });
+          });
+          wx.onAppRoute((res) => this.log.push(["route", res.path, res.webviewId]));
+          wx.onAppRouteDone((res) => this.log.push(["done", res.path, res.webviewId]));
+        } });`,
+        "pages/a/a.js": "Page({});",
+        "pages/b/b.js": "Page({});",
+      },
+      {
+        pages: ["pages/a/a", "pages/b/b"],
+        tabBar: { list: [{ pagePath: "pages/a/a" }, { pagePath: "pages/b/b" }] },
+      },
+    );
+    render(1);
+    wx().switchTab({ url: "/pages/b/b" });
+    await settle();
+    render(2);
+    wx().switchTab({ url: "/pages/a/a" });
+    await settle();
+    (globalThis as unknown as { getApp(): { rewrite: boolean } }).getApp().rewrite = true;
+    log().length = 0;
+    // a/a is page 1 and b/b is page 2; the rewrite sends the route to b/b
+    wx().switchTab({ url: "/pages/a/a" });
+    await settle();
+    expect(log()).toEqual([
+      ["route", "/pages/b/b", 2],
+      ["done", "/pages/b/b", 2],
+    ]);
+  });
+
   test("a launch page that does not exist can be rewritten before onPageNotFound", () => {
     const { log, stack } = boot(
       {

@@ -137,6 +137,17 @@ describe("<web-view>", () => {
       ["share", "https://h5.example.com/list#2"],
     ]);
 
+    // Copying the link copies where the page is now
+    handle({ type: "menu" });
+    await settle();
+    const menu = sent.findLast((message) => message.type === "ui")!;
+    if (menu.type !== "ui") throw new Error("no sheet");
+    const copy = (menu.args.itemList as string[]).indexOf("复制链接");
+    handle({ type: "uiResult", callId: menu.callId, result: { tapIndex: copy } });
+    await settle();
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    expect(await wx.getClipboardData()).toMatchObject({ data: "https://h5.example.com/list#2" });
+
     // Leaving the page hands over what came since, once
     await invoke("invokeMiniProgramAPI", { name: "postMessage", arg: { b: 2 } });
     await invoke("invokeMiniProgramAPI", { name: "reLaunch", arg: { url: "/pages/next/next" } });
