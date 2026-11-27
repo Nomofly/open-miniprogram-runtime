@@ -453,6 +453,8 @@ describe("live", () => {
     vi.useFakeTimers();
     try {
       const pusher = mount("wx-live-pusher", { url: "rtmp://a/push", autopush: true }) as Live;
+      // Previewing when the app leaves, so the pusher is suspended as it goes
+      pusher.omrLivePusherState({});
       pusher.omrPageVisibility(false, true);
       pusher.remove();
       // The view hears the return; the detached pusher does not

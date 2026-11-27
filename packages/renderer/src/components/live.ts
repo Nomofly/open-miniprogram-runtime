@@ -345,6 +345,7 @@ export class WxLivePusher extends LiveStream {
     if (!mounted) {
       this.auth = undefined;
       this.previewing = false;
+      this.suspended = false;
       this.deferred = undefined;
       this.state = "idle";
     }
