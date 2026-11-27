@@ -3,6 +3,7 @@ import type {
   ElementNode,
   ScopeDefinition,
   TemplateNode,
+  Value,
   WebviewBundle,
   WxmlFile,
 } from "@omr/compiler";
@@ -37,6 +38,8 @@ export interface VElement {
   component?: { path: string; props: Record<string, unknown> };
   /** Set on a `<slot>` of a component template: the slot name, empty for the default slot. */
   slot?: string;
+  /** The attributes whose bindings read data a `setData` wrote since the last render, even with the same value. */
+  written?: string[];
   el?: HTMLElement;
 }
 
@@ -49,6 +52,10 @@ export interface RenderScope {
   data: Record<string, unknown>;
   /** Maps the `class` value written in this scope's template to the classes the element gets. */
   transformClass(value: string): string;
+  /** For a component with `componentGenerics`: the component path each generic tag renders. */
+  generics?: Record<string, string>;
+  /** The top-level data keys a `setData` wrote since the last render. */
+  written?: ReadonlySet<string>;
 }
 
 export interface RenderEnv {
@@ -68,14 +75,33 @@ interface Context {
   data: Record<string, unknown>;
   /** `wx:for` item and index variables. */
   vars?: Map<string, unknown>;
+  /** The names, data keys or variables, whose values a `setData` wrote since the last render. */
+  written: ReadonlySet<string>;
+  /** How many templates and includes this node is rendered inside. */
+  depth: number;
+  /** How many more templates and includes the whole render may expand, shared by every branch, and whether it warned. */
+  budget: { left: number; warned: boolean };
 }
+
+/** Deeper than this, a template or include is taken to render itself without end. */
+const MAX_DEPTH = 64;
+/** More templates and includes than this in one render, as a template calling itself twice expands, stops the render there. */
+const MAX_EXPANSIONS = 10_000;
 
 /** Renders a page or component scope. */
 export function renderScope(scope: RenderScope, env: RenderEnv): VNode[] {
   const file = env.bundle.files[scope.def.template];
   if (!file) return [];
   const out: VNode[] = [];
-  renderNodes(file.nodes, { scope, file, data: scope.data }, "", out, env);
+  const written = scope.written ?? new Set();
+  const budget = { left: MAX_EXPANSIONS, warned: false };
+  renderNodes(
+    file.nodes,
+    { scope, file, data: scope.data, depth: 0, written, budget },
+    "",
+    out,
+    env,
+  );
   return out;
 }
 
@@ -85,6 +111,113 @@ function lookupIn(ctx: Context, env: RenderEnv) {
     if (Object.hasOwn(ctx.data, name)) return ctx.data[name];
     return env.wxsModules(ctx.file)[name];
   };
+}
+
+/** Evaluates a value and tells whether it read a name a `setData` wrote since the last render. */
+function evaluateWritten(value: Value, ctx: Context, env: RenderEnv): [unknown, boolean] {
+  const lookup = lookupIn(ctx, env);
+  if (ctx.written.size === 0) return [evaluateValue(value, lookup), false];
+  let read = false;
+  const result = evaluateValue(value, (name) => {
+    if (ctx.written.has(name)) read = true;
+    return lookup(name);
+  });
+  return [result, read];
+}
+
+/**
+ * A template's `data` and which of its fields are written: each field whose
+ * expression read a written name. Fields are told apart in an object literal,
+ * such as `{{a: x, ...y}}`; any other value is written as a whole.
+ */
+function templateData(
+  value: Value | undefined,
+  ctx: Context,
+  env: RenderEnv,
+): [Record<string, unknown>, Set<string>] {
+  if (value === undefined) return [{}, new Set()];
+  const result = evaluateValue(value, lookupIn(ctx, env));
+  const data = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  if (ctx.written.size === 0) return [data, new Set()];
+  const fields =
+    typeof value !== "string" && value.length === 1 && typeof value[0] !== "string"
+      ? objectFields(value[0]!.e)
+      : undefined;
+  if (!fields) {
+    const [, read] = evaluateWritten(value, ctx, env);
+    return [data, new Set(read ? Object.keys(data) : [])];
+  }
+  const written = new Set<string>();
+  for (const field of fields) {
+    const [fieldValue, read] = evaluateWritten([{ e: field.expression }], ctx, env);
+    // A later field replaces an earlier one of its name, written or not
+    const names =
+      field.key !== undefined
+        ? [field.key]
+        : fieldValue && typeof fieldValue === "object"
+          ? Object.keys(fieldValue)
+          : [];
+    for (const name of names) {
+      if (read) written.add(name);
+      else written.delete(name);
+    }
+  }
+  return [data, written];
+}
+
+/**
+ * The fields of an object literal expression, such as `{a: x, b, ...c}`: a
+ * named field with its expression, or a spread without a key. Undefined for
+ * anything else, or a literal this does not take apart, such as one with
+ * computed keys, methods or template strings.
+ */
+function objectFields(expression: string): { key?: string; expression: string }[] | undefined {
+  const source = expression.trim();
+  if (!source.startsWith("{") || !source.endsWith("}")) return undefined;
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 1;
+  for (let i = 1; i < source.length - 1; i++) {
+    const char = source[i]!;
+    if (char === "`") return undefined;
+    if (char === '"' || char === "'") {
+      // Skips the string, escapes included
+      for (i++; i < source.length - 1 && source[i] !== char; i++) if (source[i] === "\\") i++;
+      if (i >= source.length - 1) return undefined;
+    } else if ("([{".includes(char)) depth++;
+    else if (")]}".includes(char)) depth--;
+    else if (char === "," && depth === 0) {
+      parts.push(source.slice(start, i));
+      start = i + 1;
+    }
+    if (depth < 0) return undefined;
+  }
+  if (depth !== 0) return undefined;
+  parts.push(source.slice(start, -1));
+  const fields: { key?: string; expression: string }[] = [];
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    if (part.startsWith("...")) {
+      fields.push({ expression: part.slice(3) });
+      continue;
+    }
+    const match =
+      /^(?:([A-Za-z_$][\w$]*)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*(?::([\s\S]*))?$/.exec(
+        part,
+      );
+    if (!match) return undefined;
+    const [, name, double, single, rest] = match;
+    const key = name ?? (double !== undefined ? (JSON.parse(`"${double}"`) as string) : single!);
+    if (rest === undefined) {
+      // Shorthand: only a plain name reads itself
+      if (name === undefined) return undefined;
+      fields.push({ key, expression: name });
+    } else {
+      fields.push({ key, expression: rest });
+    }
+  }
+  return fields;
 }
 
 function renderNodes(
@@ -110,7 +243,14 @@ function renderNodes(
         break;
       }
       case "for": {
-        for (const [index, item] of listEntries(evaluateValue(node.list, lookup))) {
+        const [list, listWritten] = evaluateWritten(node.list, ctx, env);
+        // The item and index of a written list are written; otherwise they hide data of their names
+        const written = new Set(ctx.written);
+        for (const name of [node.item, node.index]) {
+          if (listWritten) written.add(name);
+          else written.delete(name);
+        }
+        for (const [index, item] of listEntries(list)) {
           const itemKey =
             node.key === undefined
               ? index
@@ -120,13 +260,20 @@ function renderNodes(
           const vars = new Map(ctx.vars);
           vars.set(node.item, item);
           vars.set(node.index, index);
-          renderNodes([node.node], { ...ctx, vars }, `${key}:${toText(itemKey)}/`, out, env);
+          renderNodes(
+            [node.node],
+            { ...ctx, vars, written },
+            `${key}:${toText(itemKey)}/`,
+            out,
+            env,
+          );
         }
         break;
       }
       case "include": {
         const file = env.bundle.files[node.src];
-        if (file) renderNodes(file.nodes, { ...ctx, file }, `${key}/`, out, env);
+        if (!file || tooDeep(ctx, node.src)) break;
+        renderNodes(file.nodes, { ...ctx, file, depth: ctx.depth + 1 }, `${key}/`, out, env);
         break;
       }
       case "template": {
@@ -136,13 +283,17 @@ function renderNodes(
           if (name) console.warn(`[omr] template "${name}" is not defined in ${ctx.file.path}`);
           break;
         }
-        const data = node.data === undefined ? {} : evaluateValue(node.data, lookup);
+        if (tooDeep(ctx, `template "${name}"`)) break;
+        const [data, dataWritten] = templateData(node.data, ctx, env);
         renderNodes(
           found.nodes,
           {
             scope: ctx.scope,
             file: found.file,
-            data: data && typeof data === "object" ? (data as Record<string, unknown>) : {},
+            data,
+            depth: ctx.depth + 1,
+            budget: ctx.budget,
+            written: dataWritten,
           },
           `${key}=${name}/`,
           out,
@@ -157,12 +308,33 @@ function renderNodes(
   }
 }
 
+/** Whether a template or include must not expand here; warns once per render. */
+function tooDeep(ctx: Context, what: string): boolean {
+  const { budget } = ctx;
+  const problem =
+    budget.left <= 0
+      ? `takes the render past ${MAX_EXPANSIONS} templates and includes; the rest is not rendered`
+      : ctx.depth >= MAX_DEPTH
+        ? `is nested ${MAX_DEPTH} deep; it renders itself`
+        : undefined;
+  if (!problem) {
+    budget.left--;
+    return false;
+  }
+  if (!budget.warned) console.warn(`[omr] ${what} in ${ctx.file.path} ${problem}`);
+  budget.warned = true;
+  return true;
+}
+
 /** Templates visible in a file: its own and those of the files it imports, but not their imports. */
 function findTemplate(name: string, file: WxmlFile, bundle: WebviewBundle) {
-  if (file.templates[name]) return { nodes: file.templates[name]!, file };
+  // The bundle comes through JSON, so `templates` inherits from Object.prototype again
+  if (Object.hasOwn(file.templates, name)) return { nodes: file.templates[name]!, file };
   for (const imported of file.imports) {
     const target = bundle.files[imported];
-    if (target?.templates[name]) return { nodes: target.templates[name]!, file: target };
+    if (target && Object.hasOwn(target.templates, name)) {
+      return { nodes: target.templates[name]!, file: target };
+    }
   }
   return undefined;
 }
@@ -184,6 +356,36 @@ const ASSET_ATTRIBUTES = new Set(["src", "poster"]);
 const CLASS_ATTRIBUTES = new Set(["class", "hover-class", "placeholder-class"]);
 /** Host attributes that the view uses; the other host attributes are only component properties. */
 const HOST_DOM_ATTRIBUTES = new Set(["id", "class", "style", "hidden", "slot"]);
+/**
+ * Components WeChat documents for the Skyline renderer. The compiler keeps
+ * their tags, since a project may name its own components so; when none is,
+ * they render as the simulator's built-ins of the same name.
+ */
+const SKYLINE_TAGS = new Set([
+  "list-view",
+  "grid-view",
+  "sticky-header",
+  "sticky-section",
+  "draggable-sheet",
+  "nested-scroll-header",
+  "nested-scroll-body",
+  "list-builder",
+  "grid-builder",
+  "open-container",
+  "snapshot",
+  "span",
+  "large-image",
+  "open-data-item",
+  "open-data-list",
+  "tap-gesture-handler",
+  "double-tap-gesture-handler",
+  "pan-gesture-handler",
+  "scale-gesture-handler",
+  "long-press-gesture-handler",
+  "force-press-gesture-handler",
+  "horizontal-drag-gesture-handler",
+  "vertical-drag-gesture-handler",
+]);
 
 function renderElement(
   node: ElementNode,
@@ -215,8 +417,13 @@ function renderElement(
   }
 
   const raw: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(node.attrs)) raw[name] = evaluateValue(value, lookup);
-  const componentPath = scope.def.usingComponents[node.tag];
+  const written: string[] = [];
+  for (const [name, value] of Object.entries(node.attrs)) {
+    const [result, read] = evaluateWritten(value, ctx, env);
+    raw[name] = result;
+    if (read) written.push(name);
+  }
+  const componentPath = scope.def.usingComponents[node.tag] ?? scope.generics?.[node.tag];
   const attrs: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(raw)) {
     if (componentPath && !HOST_DOM_ATTRIBUTES.has(name) && !name.startsWith("data-")) continue;
@@ -236,7 +443,7 @@ function renderElement(
   out.push({
     kind: "element",
     key,
-    tag: node.tag,
+    tag: !componentPath && SKYLINE_TAGS.has(node.tag) ? `wx-${node.tag}` : node.tag,
     attrs,
     events: node.events.map((event) => ({
       name: event.name,
@@ -247,6 +454,7 @@ function renderElement(
     children,
     ownerId: scope.nodeId,
     component: componentPath ? { path: componentPath, props: raw } : undefined,
+    ...(written.length > 0 && { written }),
   });
 }
 

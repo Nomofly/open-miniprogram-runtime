@@ -35,6 +35,14 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+          # The simulator is a development tool: its web-view proxy fetches whatever URL a
+          # Mini Program's <web-view> names, and the page frames that proxy over plain http.
+          config: |
+            query-filters:
+              - exclude:
+                  id: js/request-forgery
+              - exclude:
+                  id: js/functionality-from-untrusted-source
       - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           category: /language:${{ matrix.language }}

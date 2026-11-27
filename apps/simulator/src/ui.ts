@@ -1,8 +1,10 @@
 /**
  * Native UI drawn by the shell over the page: toasts, modals, action sheets, the
- * privacy popup, the consent dialogs of authorization and the nickname bar above
- * the keyboard. Every button has a `data-omr-action` attribute, so automation
- * can answer dialogs by selector.
+ * privacy popup, the consent dialogs of authorization, the nickname bar above
+ * the keyboard, payment and subscription sheets, the scanner, location pages,
+ * the image viewer, and the settings, customer service and feedback pages.
+ * Every button has a `data-omr-action` attribute, so automation can answer
+ * dialogs by selector.
  */
 
 export type UiHandler = (
@@ -54,7 +56,7 @@ export function createUi(
 
   /** Shows a dialog; `build` receives `close`, which removes it and resolves with a result. */
   const dialog = (
-    kind: "center" | "sheet",
+    kind: "center" | "sheet" | "full",
     build: (close: (result: Record<string, unknown>) => void) => HTMLElement,
   ) =>
     new Promise<Record<string, unknown>>((resolve) => {
@@ -63,7 +65,9 @@ export function createUi(
         resolve(result);
       };
       const panel = build(close);
-      panel.classList.add(kind === "center" ? "omr-modal" : "omr-sheet");
+      panel.classList.add(
+        kind === "center" ? "omr-modal" : kind === "sheet" ? "omr-sheet" : "omr-fullscreen",
+      );
       const root = h("div", { class: "omr-dialog-layer" }, h("div", { class: "omr-mask" }), panel);
       layer.append(root);
     });
@@ -145,6 +149,191 @@ export function createUi(
       };
       closeNicknameBar = close;
       layer.append(bar);
+    });
+
+  /** The bar of a full-screen system page: a cancel button and a title; the capsule stays on its right. */
+  const pageBar = (title: string, onCancel: () => void) =>
+    h(
+      "div",
+      { class: "omr-page-bar" },
+      button("取消", "cancel", onCancel, "omr-page-bar-cancel"),
+      h("span", { class: "omr-page-bar-title" }, title),
+      h("span", {}),
+    );
+
+  /** The bar of a full-screen WeChat page with a back arrow instead of a cancel button. */
+  const backBar = (title: string, onBack: () => void) =>
+    h(
+      "div",
+      { class: "omr-page-bar" },
+      button("‹", "back", onBack, "omr-page-bar-back"),
+      h("span", { class: "omr-page-bar-title" }, title),
+      h("span", {}),
+    );
+
+  /** The settings page of `wx.openSetting`: a switch per scope; going back resolves with the settings. */
+  const settings = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const scopes = (Array.isArray(args.scopes) ? args.scopes : []) as {
+        scope: string;
+        description: string;
+        allowed: boolean;
+      }[];
+      const authSetting: Record<string, boolean> = {};
+      const rows = scopes.map(({ scope, description, allowed }) => {
+        authSetting[scope] = allowed;
+        const toggle = h("button", {
+          type: "button",
+          class: `omr-switch${allowed ? " omr-switch-on" : ""}`,
+          role: "switch",
+          "aria-checked": String(allowed),
+          "aria-label": description,
+          "data-omr-action": `toggle-${scope}`,
+        });
+        toggle.addEventListener("click", () => {
+          const on = !authSetting[scope];
+          authSetting[scope] = on;
+          toggle.classList.toggle("omr-switch-on", on);
+          toggle.setAttribute("aria-checked", String(on));
+        });
+        return h(
+          "div",
+          { class: "omr-settings-row", "data-scope": scope },
+          h("span", {}, description),
+          toggle,
+        );
+      });
+      return h(
+        "div",
+        { class: "omr-settings", "data-omr-dialog": "openSetting" },
+        backBar("设置", () => close({ authSetting })),
+        h("div", { class: "omr-settings-section" }, `允许${text(args.appName) || appName}使用我的`),
+        rows.length
+          ? h("div", { class: "omr-settings-group" }, ...rows)
+          : h("div", { class: "omr-settings-empty" }, "小程序尚未申请使用你的信息"),
+      );
+    });
+
+  /** The customer service chat of a `contact` button; resolves `{ tapped: true }` when the user taps the card. */
+  const contactChat = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const name = text(args.appName) || appName;
+      const card = args.card as { title: string; img: string; path: string } | undefined;
+      let cardButton: HTMLElement | undefined;
+      if (card) {
+        cardButton = button("", "openCard", () => close({ tapped: true }), "omr-contact-card");
+        cardButton.append(
+          h("span", { class: "omr-contact-card-app" }, name),
+          h("span", { class: "omr-contact-card-title" }, card.title || name),
+          card.img
+            ? h("img", { class: "omr-contact-card-img", src: resolveAsset(card.img), alt: "" })
+            : h("span", { class: "omr-contact-card-img" }),
+          h("span", { class: "omr-contact-card-footer" }, "小程序"),
+        );
+      }
+      return h(
+        "div",
+        { class: "omr-contact", "data-omr-dialog": "contact" },
+        backBar("客服消息", () => close({})),
+        h("div", { class: "omr-contact-name" }, name),
+        h(
+          "div",
+          { class: "omr-contact-messages" },
+          h(
+            "div",
+            { class: "omr-contact-message" },
+            h("span", { class: "omr-app-icon" }, name.slice(0, 1)),
+            h("div", { class: "omr-contact-bubble" }, "你好，请问有什么可以帮你？"),
+          ),
+          cardButton && h("div", { class: "omr-contact-hint" }, "你可能要发送的小程序"),
+          cardButton,
+        ),
+      );
+    });
+
+  /** The feedback page of a `feedback` button; WeChat tells the Mini Program nothing about it. */
+  const feedback = () =>
+    dialog("full", (close) => {
+      const input = h("textarea", {
+        class: "omr-feedback-input",
+        placeholder: "请填写10个字以上的问题描述，以便我们提供更好的帮助",
+      }) as HTMLTextAreaElement;
+      return h(
+        "div",
+        { class: "omr-feedback", "data-omr-dialog": "feedback" },
+        backBar("意见反馈", () => close({})),
+        h("div", { class: "omr-settings-section" }, "问题和意见"),
+        input,
+        button(
+          "提交",
+          "submit",
+          () => close({ submitted: true, content: input.value }),
+          "omr-feedback-submit",
+        ),
+      );
+    });
+
+  /** A map without tiles: a grid, a pin and the coordinates. */
+  const mapPlaceholder = (latitude: unknown, longitude: unknown) =>
+    h(
+      "div",
+      { class: "omr-map" },
+      h("div", { class: "omr-map-pin" }),
+      h(
+        "div",
+        { class: "omr-map-coords" },
+        `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`,
+      ),
+    );
+
+  /** The amount of a payment in fen, as WeChat Pay shows it. */
+  const yuan = (fen: unknown) => (typeof fen === "number" ? `¥${(fen / 100).toFixed(2)}` : "");
+
+  /** The full-screen viewer of `wx.previewImage` and `wx.previewMedia`; resolves when it closes. */
+  const preview = (args: Record<string, unknown>) =>
+    dialog("full", (close) => {
+      const sources = (Array.isArray(args.sources) ? args.sources : []) as {
+        url: string;
+        type: string;
+        poster?: string;
+      }[];
+      let index = Math.min(Math.max(0, Number(args.current) || 0), Math.max(0, sources.length - 1));
+      const stage = h("div", { class: "omr-preview-stage" });
+      const counter = h("div", { class: "omr-preview-counter" });
+      const render = () => {
+        const source = sources[index];
+        counter.textContent = sources.length > 1 ? `${index + 1}/${sources.length}` : "";
+        if (!source) {
+          stage.replaceChildren();
+          return;
+        }
+        const media =
+          source.type === "video"
+            ? h("video", {
+                class: "omr-preview-media",
+                src: resolveAsset(source.url),
+                controls: "",
+                ...(source.poster ? { poster: resolveAsset(source.poster) } : {}),
+              })
+            : h("img", { class: "omr-preview-media", src: resolveAsset(source.url), alt: "" });
+        if (source.type !== "video") media.addEventListener("click", () => close({}));
+        stage.replaceChildren(media);
+      };
+      const step = (delta: number) => () => {
+        index = (index + delta + sources.length) % sources.length;
+        render();
+      };
+      render();
+      const root = h(
+        "div",
+        { class: "omr-preview", "data-omr-dialog": "previewImage" },
+        counter,
+        stage,
+        sources.length > 1 && button("‹", "prev", step(-1), "omr-preview-prev"),
+        sources.length > 1 && button("›", "next", step(1), "omr-preview-next"),
+        button("×", "close", () => close({}), "omr-preview-close"),
+      );
+      return root;
     });
 
   const avatar = (src: unknown) =>
@@ -276,6 +465,131 @@ export function createUi(
             button("取消", "deny", () => close({ allow: false })),
           );
         });
+      case "payment":
+        return dialog("sheet", (close) =>
+          h(
+            "div",
+            { class: "omr-payment", "data-omr-dialog": "payment" },
+            button("×", "cancel", () => close({ pay: false }), "omr-payment-close"),
+            h("div", { class: "omr-payment-title" }, "微信支付"),
+            h("div", { class: "omr-payment-payee" }, `付款给 ${text(args.appName) || appName}`),
+            h(
+              "div",
+              { class: "omr-payment-amount" },
+              yuan(args.amount) || h("span", { class: "omr-payment-unknown" }, "模拟支付"),
+            ),
+            h(
+              "div",
+              { class: "omr-payment-row" },
+              h("span", {}, "付款方式"),
+              h("span", { class: "omr-payment-method" }, "零钱"),
+            ),
+            button("支付", "pay", () => close({ pay: true }), "omr-payment-pay"),
+          ),
+        );
+      case "subscribeMessage":
+        return dialog("sheet", (close) => {
+          const ids = (Array.isArray(args.tmplIds) ? args.tmplIds : []).map(String);
+          const accepted = new Set(ids);
+          const rows = ids.map((id, index) => {
+            const toggle = h("button", {
+              type: "button",
+              class: "omr-switch omr-switch-on",
+              role: "switch",
+              "aria-checked": "true",
+              "data-omr-action": `toggle-${index}`,
+            });
+            toggle.addEventListener("click", () => {
+              const on = !accepted.delete(id);
+              if (on) accepted.add(id);
+              toggle.classList.toggle("omr-switch-on", on);
+              toggle.setAttribute("aria-checked", String(on));
+            });
+            return h(
+              "div",
+              { class: "omr-subscribe-row", "data-tmpl-id": id },
+              h("span", { class: "omr-subscribe-id" }, id),
+              toggle,
+            );
+          });
+          return h(
+            "div",
+            { class: "omr-consent", "data-omr-dialog": "subscribeMessage" },
+            h(
+              "div",
+              { class: "omr-consent-app" },
+              h("span", { class: "omr-app-icon" }, (text(args.appName) || appName).slice(0, 1)),
+              h("span", {}, `${text(args.appName) || appName} 申请`),
+            ),
+            h("div", { class: "omr-consent-title" }, "发送以下订阅消息"),
+            h("div", { class: "omr-consent-body omr-subscribe-list" }, ...rows),
+            h(
+              "div",
+              { class: "omr-consent-buttons" },
+              button("取消", "deny", () => close({ accepted: [] })),
+              button(
+                "允许",
+                "allow",
+                () => close({ accepted: ids.filter((id) => accepted.has(id)) }),
+                "omr-primary",
+              ),
+            ),
+          );
+        });
+      case "scanCode":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-scan", "data-omr-dialog": "scanCode" },
+            button("×", "cancel", () => close({}), "omr-scan-close"),
+            h("div", { class: "omr-scan-frame" }, h("div", { class: "omr-scan-line" })),
+            h("div", { class: "omr-scan-tip" }, "将二维码/条码放入框内，即可自动扫描"),
+            h("div", { class: "omr-scan-result" }, `模拟识别结果：${text(args.result)}`),
+            button("识别", "scan", () => close({ scanned: true }), "omr-scan-button"),
+            args.onlyFromCamera
+              ? undefined
+              : button("相册", "album", () => close({ scanned: true }), "omr-scan-album"),
+          ),
+        );
+      case "chooseLocation":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-location", "data-omr-dialog": "chooseLocation" },
+            pageBar("位置", () => close({})),
+            mapPlaceholder(args.latitude, args.longitude),
+            h(
+              "div",
+              { class: "omr-location-item omr-location-selected" },
+              h("div", { class: "omr-location-name" }, text(args.name)),
+              h("div", { class: "omr-location-address" }, text(args.address)),
+              button("完成", "confirm", () => close({ confirm: true }), "omr-location-done"),
+            ),
+          ),
+        );
+      case "openLocation":
+        return dialog("full", (close) =>
+          h(
+            "div",
+            { class: "omr-location", "data-omr-dialog": "openLocation" },
+            pageBar("位置", () => close({})),
+            mapPlaceholder(args.latitude, args.longitude),
+            h(
+              "div",
+              { class: "omr-location-item" },
+              h("div", { class: "omr-location-name" }, text(args.name) || "位置"),
+              h("div", { class: "omr-location-address" }, text(args.address)),
+            ),
+          ),
+        );
+      case "previewImage":
+        return preview(args);
+      case "openSetting":
+        return settings(args);
+      case "contact":
+        return contactChat(args);
+      case "feedback":
+        return feedback();
       default:
         console.warn(`[omr] the simulator does not show "${name}"`);
         return {};

@@ -4,16 +4,28 @@
  */
 import type { WebviewBundle, WxmlFile } from "@omr/compiler";
 import type {
+  AdConfig,
   ComponentListeners,
   ComponentViewOptions,
   LogicToView,
+  EventBinding,
   SelectorQueryRequest,
+  TreeNode,
   ViewToLogic,
   WxEventTarget,
 } from "@omr/runtime";
-import { resolvePath, setPath, toJsonValue } from "@omr/runtime";
+import { fsFileUrl, isFsPath, resolvePath, setPath, toJsonValue } from "@omr/runtime";
+import { canvasElements, type CanvasElement } from "./canvas.ts";
+import { answerRequest } from "./requests.ts";
+import { createObservers } from "./observers.ts";
+import { createAnimations } from "./animation.ts";
 import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
+import { setAdConfig } from "./components/ad.ts";
+import { emit, lengthOf } from "./components/base.ts";
+import { setAppBackground } from "./components/live.ts";
+import { setMapLocation } from "./components/map.ts";
+import { setStreetsUrl } from "./components/region.ts";
 import {
   convertRpx,
   renderScope,
@@ -26,17 +38,31 @@ import {
 export interface ViewOptions {
   bundle: WebviewBundle;
   windowWidth: number;
+  /** How tall the simulated keyboard of a focused input is; 0 draws none. */
+  keyboardHeight?: number;
   /** What a non-zero rpx value that rounds to 0 becomes: 0.5 on iOS devices with a pixel ratio above 1, else 1. */
   hairline?: number;
   /** URL prefix the Mini Program's files are served at, such as `/__omr/files/`. */
   assetBase: string;
   /** Whether app.json sets `"style": "v2"`. */
   styleV2: boolean;
+  /** `ad` of the simulator config: whether `<ad>` and `<ad-custom>` fill or fail. */
+  ad?: AdConfig;
+  /** `location` of the simulator config: where `<map>` puts the user. */
+  location?: { latitude: number; longitude: number };
+  /** Where the streets of a district are served for `<picker mode="region" level="sub-district">`. */
+  regionStreetsUrl?: string;
   post: (message: ViewToLogic) => void;
 }
 
 /** The attribute that marks a component host; matches `HOST_ATTRIBUTE` in @omr/compiler. */
 const HOST_ATTRIBUTE = "omr-host";
+/** Marks the host of a component with `virtualHost`, which takes no box of its own. */
+const VIRTUAL_ATTRIBUTE = "omr-virtual";
+/** The tag of the `custom-tab-bar` component's host, which the view adds to a tab page. */
+const TAB_BAR_TAG = "omr-custom-tab-bar";
+const HOST_CSS = `[${VIRTUAL_ATTRIBUTE}] { display: contents !important; }
+${TAB_BAR_TAG} { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 9000; }`;
 
 /** What the WeChat events of a button `open-type` are called. */
 const OPEN_TYPE_EVENTS: Record<string, string> = {
@@ -46,11 +72,19 @@ const OPEN_TYPE_EVENTS: Record<string, string> = {
   chooseAvatar: "chooseavatar",
   openSetting: "opensetting",
   contact: "contact",
-  launchApp: "launchapp",
+  // The simulator is never opened from an app (scene 1069), so launchApp always fails
+  launchApp: "error",
   agreePrivacyAuthorization: "agreeprivacyauthorization",
   share: "",
   feedback: "",
 };
+/** The attributes of a `contact` button the customer service chat shows. */
+const CONTACT_ATTRIBUTES = [
+  "show-message-card",
+  "send-message-title",
+  "send-message-img",
+  "send-message-path",
+];
 
 interface Scope extends RenderScope {
   initialized: boolean;
@@ -84,9 +118,12 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   const { bundle, post } = options;
   const hairline = options.hairline ?? 1;
   defineBuiltins();
+  setAdConfig(options.ad);
+  setMapLocation(options.location);
+  setStreetsUrl(options.regionStreetsUrl);
 
   const style = document.createElement("style");
-  style.textContent = `${BASE_CSS}\n${convertRpx(bundle.css, options.windowWidth, hairline)}`;
+  style.textContent = `${BASE_CSS}\n${PULL_DOWN_CSS}\n${HOST_CSS}\n${convertRpx(bundle.css, options.windowWidth, hairline)}`;
   document.head.append(style);
   if (options.styleV2) document.documentElement.classList.add("omr-v2");
   if (bundle.window.disableScroll) document.documentElement.style.overflow = "hidden";
@@ -147,8 +184,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     wxsModules,
     convertStyle: (css: string) => convertRpx(css, options.windowWidth, hairline),
     resolveAsset: (src: string, file: string) =>
-      /^([a-z][\w+.-]*:|\/\/)/i.test(src) ? src : `${options.assetBase}${resolvePath(file, src)}`,
+      isFsPath(src)
+        ? fsFileUrl(src)
+        : /^([a-z][\w+.-]*:|\/\/)/i.test(src)
+          ? src
+          : `${options.assetBase}${resolvePath(file, src)}`,
   };
+  const animations = createAnimations(env.convertStyle);
 
   const createScope = (
     nodeId: number,
@@ -193,6 +235,8 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   const domOf = (vnode: VNode): Node => (vnode.kind === "text" ? vnode.node! : vnode.el!);
 
   const setAttribute = (el: HTMLElement, name: string, value: unknown) => {
+    // WeChat's `aria-role` is the standard `role`, which accessibility snapshots read
+    if (name === "aria-role") setAttribute(el, "role", value);
     if (value === undefined || value === null || value === false || typeof value === "object") {
       el.removeAttribute(name);
       return;
@@ -208,14 +252,20 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     el: HTMLElement,
     previous: Record<string, unknown>,
     attrs: Record<string, unknown>,
+    written: readonly string[] = [],
   ) => {
+    // A virtual host has no box for its class and style to apply to
+    const virtual = states.get(el)?.scope?.options.virtualHost;
     for (const name of Object.keys(previous)) {
       if (!(name in attrs)) setAttribute(el, name, undefined);
     }
     for (const [name, value] of Object.entries(attrs)) {
+      if (virtual && (name === "class" || name === "style")) continue;
       if (!(name in previous) || previous[name] !== value) setAttribute(el, name, value);
     }
-    (el as Partial<BuiltinElement>).omrUpdate?.(attrs);
+    // `animation="{{animationData}}"` plays a `wx.createAnimation` export over the element's style
+    animations.attribute(el, attrs.animation, previous.style !== attrs.style);
+    (el as Partial<BuiltinElement>).omrUpdate?.(attrs, written);
   };
 
   const createNode = (vnode: VNode): Node => {
@@ -226,7 +276,16 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     const el = document.createElement(vnode.tag);
     vnode.el = el;
     states.set(el, { ownerId: vnode.ownerId, events: vnode.events, props: vnode.attrs });
-    applyAttrs(el, {}, vnode.attrs);
+    // Built-ins that make their own nodes, such as rich-text, scope their classes like the template's,
+    // and resolve paths in object attributes, such as a map marker's iconPath, like its paths
+    const owner = scopes.get(vnode.ownerId);
+    if (owner && vnode.tag.startsWith("wx-")) {
+      (el as { omrTransformClass?: (value: string) => string }).omrTransformClass = (value) =>
+        owner.transformClass(value);
+      (el as Partial<BuiltinElement>).omrResolveAsset = (src) =>
+        env.resolveAsset(src, owner.def.template);
+    }
+    applyAttrs(el, {}, vnode.attrs, vnode.written);
     mountContent(vnode);
     return el;
   };
@@ -244,7 +303,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     state.ownerId = vnode.ownerId;
     state.events = vnode.events;
     state.props = vnode.attrs;
-    applyAttrs(el, previous.attrs, vnode.attrs);
+    applyAttrs(el, previous.attrs, vnode.attrs, vnode.written);
     mountContent(vnode, previous);
   };
 
@@ -305,7 +364,14 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     const { path, props } = vnode.component!;
     const jsonProps = toJsonValue(props);
     const listeners = listenersOf(vnode.events);
+    const id = toText(props.id);
+    const dataset = datasetOf(props);
     let scope = state.scope;
+    // A host kept while it was out of the page, such as in a slot under wx:if, was detached; it starts again
+    if (scope && scopes.get(scope.nodeId) !== scope) {
+      scope = state.scope = undefined;
+      el.replaceChildren();
+    }
     if (!scope) {
       const owner = scopes.get(vnode.ownerId)!;
       scope = createScope(nextNodeId++, bundle.components[path]!, el, owner);
@@ -318,15 +384,15 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         path,
         props: jsonProps,
         listeners,
-        id: toText(props.id),
-        dataset: datasetOf(props),
+        id,
+        dataset,
       });
       scope.sentProps = JSON.stringify([jsonProps, listeners]);
     } else {
       const sent = JSON.stringify([jsonProps, listeners]);
       if (sent !== scope.sentProps) {
         scope.sentProps = sent;
-        post({ type: "props", nodeId: scope.nodeId, props: jsonProps, listeners });
+        post({ type: "props", nodeId: scope.nodeId, props: jsonProps, listeners, id, dataset });
         // External classes come from host attributes
         if (scope.options.externalClasses.length > 0) dirty.add(scope);
       }
@@ -366,14 +432,51 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
           scope.owner!.transformClass(toText(props[name])),
         ]),
       );
+      // `<list generic:item="my-item">`: the owner names a component of its own for each generic
+      const generics: Record<string, string> = {};
+      for (const [name, fallback] of Object.entries(scope.def.generics ?? {})) {
+        const tag = toText(props[`generic:${name}`]);
+        const chosen = tag
+          ? (scope.owner.def.usingComponents[tag] ?? scope.owner.generics?.[tag])
+          : undefined;
+        if (chosen || fallback) generics[name] = chosen ?? fallback;
+      }
+      scope.generics = generics;
     }
     const vnodes = renderScope(scope, env);
+    scope.written = undefined;
+    if (scope === page && bundle.customTabBar) {
+      vnodes.push({
+        kind: "element",
+        key: TAB_BAR_TAG,
+        tag: TAB_BAR_TAG,
+        attrs: {},
+        events: [],
+        children: [],
+        ownerId: 0,
+        component: { path: bundle.customTabBar, props: {} },
+      });
+    }
     patchChildren(scope.root, scope.vnodes, vnodes, scope.anchor);
     scope.vnodes = vnodes;
+    if (scope === page && bundle.customTabBar) keepClearOfTabBar((vnodes.at(-1) as VElement).el!);
+  };
+
+  // The custom tab bar sits over the bottom of the window; the page ends above it. The room is
+  // kept on the root element, as `<page-meta page-style>` replaces the body's style
+  let tabBarObserver: ResizeObserver | undefined;
+  const keepClearOfTabBar = (host: HTMLElement) => {
+    if (tabBarObserver) return;
+    tabBarObserver = new ResizeObserver(() => {
+      document.documentElement.style.paddingBottom = `${host.offsetHeight}px`;
+    });
+    tabBarObserver.observe(host);
   };
 
   // Batching: messages mark scopes dirty; one flush renders them, then reports the sequence number
   const dirty = new Set<Scope>();
+  /** Work waiting for the next render, such as `this.animate` called in `onLoad`. */
+  const afterRender: (() => void)[] = [];
   let scheduled = false;
   let renderedSeq = 0;
   let pendingSeq = 0;
@@ -406,11 +509,96 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       }
     }
     if (detached.length > 0) post({ type: "detach", nodeIds: detached });
+    reportTree();
+    observers.afterRender();
+    dropRemovedContainers();
+    reportWebView();
+    for (const run of afterRender.splice(0)) run();
     if (pendingSeq > renderedSeq) {
       renderedSeq = pendingSeq;
       post({ type: "rendered", seq: renderedSeq });
     }
   };
+
+  /**
+   * Tells the logic layer about the page's `<web-view>`, which the shell shows
+   * over the page: its `src` and the handlers bound to its events, when they
+   * changed. WeChat allows one per page; later ones are ignored.
+   */
+  let sentWebView = JSON.stringify({ type: "webView" });
+  const reportWebView = () => {
+    const el = document.querySelector("wx-web-view");
+    const state = el ? states.get(el) : undefined;
+    const src = state ? toText(state.props.src ?? "").trim() : "";
+    let message: Extract<ViewToLogic, { type: "webView" }> = { type: "webView" };
+    if (el && state && src) {
+      const handlers: NonNullable<typeof message.handlers> = {};
+      for (const binding of state.events) {
+        if (
+          (binding.name === "load" || binding.name === "error" || binding.name === "message") &&
+          binding.handler
+        ) {
+          handlers[binding.name] ??= { ownerId: state.ownerId, handler: binding.handler };
+        }
+      }
+      message = { type: "webView", src, target: targetOf(el), handlers };
+    }
+    // The target's offsets are not part of what changed
+    const key = JSON.stringify({
+      ...message,
+      target: message.target && { id: message.target.id, dataset: message.target.dataset },
+    });
+    if (key === sentWebView) return;
+    sentWebView = key;
+    post(message);
+  };
+
+  /** Tells the logic layer where each component is, when that changed. */
+  let sentTree = "[]";
+  const reportTree = () => {
+    const nodes: TreeNode[] = [];
+    for (const el of document.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
+      const scope = states.get(el)?.scope;
+      if (!scope?.host || scopes.get(scope.nodeId) !== scope) continue;
+      let parentId = 0;
+      for (let current = el.parentElement; current; current = current.parentElement) {
+        const above = states.get(current)?.scope;
+        if (above) {
+          parentId = above.nodeId;
+          break;
+        }
+      }
+      const ancestors: TreeNode["ancestors"] = [];
+      for (let current = managedParent(el); current; current = managedParent(current)) {
+        const state = states.get(current)!;
+        if (state.events.length === 0) continue;
+        ancestors.push({
+          ownerId: state.ownerId,
+          id: current.id,
+          dataset: datasetOf(state.props),
+          events: state.events.map(bindingOf),
+        });
+      }
+      nodes.push({
+        nodeId: scope.nodeId,
+        parentId,
+        tag: scope.host.tag,
+        className: toText(scope.host.component!.props.class),
+        events: scope.host.events.map(bindingOf),
+        ancestors,
+      });
+    }
+    const text = JSON.stringify(nodes);
+    if (text === sentTree) return;
+    sentTree = text;
+    post({ type: "tree", nodes: JSON.parse(text) as TreeNode[] });
+  };
+  const bindingOf = (event: VEvent): EventBinding => ({
+    name: event.name,
+    handler: event.handler,
+    catch: event.catch,
+    capture: event.capture,
+  });
 
   // Events
   const datasetOf = (props: Record<string, unknown>): Record<string, unknown> => {
@@ -457,7 +645,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     name: string,
     detail: Record<string, unknown>,
     bubbles: boolean,
-    extra: { touches?: unknown[]; changedTouches?: unknown[] } = {},
+    extra: {
+      touches?: unknown[];
+      changedTouches?: unknown[];
+      type?: string;
+      causedBy?: string;
+    } = {},
+    replyId?: number,
   ): boolean => {
     const path: Element[] = [];
     for (let el: Element | undefined = target; el; el = bubbles ? managedParent(el) : undefined) {
@@ -484,6 +678,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
               mark: {},
               ...extra,
             },
+            ...(replyId === undefined ? {} : { replyId }),
           });
         }
         if (binding.catch) return true;
@@ -495,9 +690,17 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     return bound;
   };
 
-  const touchesOf = (event: PointerEvent | MouseEvent) => {
+  const touchesOf = (event: PointerEvent | MouseEvent, target?: Element) => {
+    const identifier = "pointerId" in event ? event.pointerId : 0;
+    // A canvas reports CanvasTouch: only the position inside the canvas
+    const canvas = target?.closest("wx-canvas");
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const touch = { identifier, x: event.clientX - rect.left, y: event.clientY - rect.top };
+      return { touches: [touch], changedTouches: [touch] };
+    }
     const touch = {
-      identifier: "pointerId" in event ? event.pointerId : 0,
+      identifier,
       pageX: event.pageX,
       pageY: event.pageY,
       clientX: event.clientX,
@@ -508,6 +711,9 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   };
 
   const isDisabled = (el: Element | null) => !!el && Boolean(states.get(el)?.props.disabled);
+
+  /** The controls a `<label>` passes its taps to. */
+  const LABEL_CONTROLS = "wx-button, wx-checkbox, wx-radio, wx-switch, wx-input, wx-textarea";
 
   /** What a tap does beyond the tap event: button open-types and forms, navigators, controls. */
   const afterTap = (target: Element) => {
@@ -530,6 +736,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
           ownerId: state.ownerId,
           handler: binding?.handler ?? "",
           openType,
+          ...(openType === "contact"
+            ? {
+                openTypeProps: Object.fromEntries(
+                  CONTACT_ATTRIBUTES.map((name) => [name, state.props[name]]),
+                ),
+              }
+            : {}),
           event: {
             type: eventName,
             timeStamp: Math.round(performance.now()),
@@ -541,16 +754,45 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         });
       }
       const formType = state.props["form-type"];
-      const form = button.closest("wx-form");
+      // A button inside a component reaches an outer form only through wx://form-field-button
+      let form = button.closest("wx-form");
+      while (form && !formReaches(form, button, "formFieldButton")) {
+        form = form.parentElement?.closest("wx-form") ?? null;
+      }
       if (form && (formType === "submit" || formType === "reset")) submitForm(form, formType);
     }
     const navigator = target.closest("wx-navigator");
     if (navigator) {
-      const props = states.get(navigator)?.props ?? {};
-      if (props.target !== "miniProgram") {
+      const state = states.get(navigator);
+      const props = state?.props ?? {};
+      const openType = toText(props["open-type"] ?? "navigate");
+      if (props.target === "miniProgram") {
+        const handler = (name: string) => {
+          const binding = state?.events.find((event) => event.name === name && !event.capture);
+          return binding?.handler
+            ? { ownerId: state!.ownerId, handler: binding.handler }
+            : undefined;
+        };
+        post({
+          type: "navigateMiniProgram",
+          openType,
+          props: Object.fromEntries(
+            ["app-id", "path", "extra-data", "version", "short-link"].map((name) => [
+              name,
+              props[name],
+            ]),
+          ),
+          target: targetOf(navigator),
+          handlers: {
+            success: handler("success"),
+            fail: handler("fail"),
+            complete: handler("complete"),
+          },
+        });
+      } else {
         post({
           type: "navigate",
-          openType: toText(props["open-type"] ?? "navigate"),
+          openType,
           url: props.url === undefined ? undefined : toText(props.url),
           delta: props.delta === undefined ? undefined : Number(props.delta),
         });
@@ -560,21 +802,49 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     const label = target.closest("wx-label");
     if (control) {
       control.omrActivate?.();
-    } else if (label) {
+    } else if (label && !target.closest("wx-button, wx-input, wx-textarea")) {
+      // `for` names a control in the label's own template; otherwise the first control inside it
+      const owner = states.get(label)?.ownerId;
       const forId = states.get(label)?.props.for;
       const linked = forId
-        ? document.getElementById(toText(forId))
-        : label.querySelector("wx-checkbox, wx-radio, wx-switch");
-      (linked as Partial<BuiltinElement> | null)?.omrActivate?.();
-      if (linked && /^WX-(INPUT|TEXTAREA)$/.test(linked.tagName)) {
+        ? [...(scopes.get(owner ?? -1)?.root ?? document).querySelectorAll("[id]")].find(
+            (el) => el.id === toText(forId) && states.get(el)?.ownerId === owner,
+          )
+        : label.querySelector(LABEL_CONTROLS);
+      if (!linked) return;
+      if (/^WX-(INPUT|TEXTAREA)$/.test(linked.tagName)) {
         linked.querySelector<HTMLElement>("input, textarea")?.focus();
+      } else if (linked.tagName === "WX-BUTTON") {
+        if (!isDisabled(linked)) dispatch(linked, "tap", {}, true);
+        afterTap(linked);
+      } else {
+        (linked as Partial<BuiltinElement>).omrActivate?.();
       }
     }
   };
 
+  /**
+   * Whether a form sees an element: the element is in the form's template, or
+   * every component between them has the behavior that opens it to forms.
+   */
+  const formReaches = (
+    form: Element,
+    el: Element,
+    behavior: "formFieldGroup" | "formFieldButton",
+  ): boolean => {
+    const formOwner = states.get(form)?.ownerId;
+    for (let scope = scopes.get(states.get(el)?.ownerId ?? -1); scope; scope = scope.owner) {
+      if (scope.nodeId === formOwner) return true;
+      if (!scope.options[behavior]) return false;
+    }
+    return false;
+  };
+
   const submitForm = (form: Element, kind: "submit" | "reset") => {
     const controls = [...form.querySelectorAll("*")].filter(
-      (el) => typeof (el as Partial<BuiltinElement>).omrFormValue === "function",
+      (el) =>
+        typeof (el as Partial<BuiltinElement>).omrFormValue === "function" &&
+        formReaches(form, el, "formFieldGroup"),
     ) as BuiltinElement[];
     if (kind === "reset") {
       for (const control of controls) control.omrReset?.();
@@ -586,6 +856,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       const name = states.get(control)?.props.name;
       if (name !== undefined && name !== "") value[toText(name)] = control.omrFormValue!();
     }
+    // Custom components with wx://form-field submit their `value` data
+    for (const host of form.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
+      const scope = states.get(host)?.scope;
+      if (!scope?.options.formField || !formReaches(form, host, "formFieldGroup")) continue;
+      const name = toText(scope.data.name);
+      if (name) value[name] = scope.data.value;
+    }
     dispatch(form, "submit", { value }, false);
   };
 
@@ -593,7 +870,22 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     | { target: Element; x: number; y: number; timer: ReturnType<typeof setTimeout> }
     | undefined;
   let suppressTap = false;
-  let hovered: { el: Element; classes: string[]; stay: number }[] = [];
+  /** The press's hover states: each shows after its start time and goes `stay` ms after release. */
+  let hovered: {
+    el: Element;
+    classes: string[];
+    stay: number;
+    shown: boolean;
+    timer?: ReturnType<typeof setTimeout>;
+  }[] = [];
+  /** Pending removals of hover classes, so a new press on the element keeps its classes. */
+  const hoverRemovals = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+  const showHover = (entry: (typeof hovered)[number]) => {
+    clearTimeout(entry.timer);
+    clearTimeout(hoverRemovals.get(entry.el));
+    entry.el.classList.add(...entry.classes);
+    entry.shown = true;
+  };
 
   const hoverOf = (el: Element) => {
     const props = states.get(el)?.props ?? {};
@@ -602,20 +894,30 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       tag === "WX-BUTTON" ? "button-hover" : tag === "WX-NAVIGATOR" ? "navigator-hover" : "none";
     const value = toText(props["hover-class"] ?? builtinHover);
     if (value === "none" || value === "" || props.disabled) return undefined;
-    const stay = Number(props["hover-stay-time"] ?? (builtinHover === "none" ? 400 : 70));
-    return { classes: value.split(/\s+/), stay };
+    // Defaults from the docs: view 400 ms, button 70 ms, navigator 600 ms
+    const stay = Number(
+      props["hover-stay-time"] ?? (tag === "WX-BUTTON" ? 70 : tag === "WX-NAVIGATOR" ? 600 : 400),
+    );
+    const start = Number(props["hover-start-time"] ?? 50);
+    return { classes: value.split(/\s+/), stay, start: Number.isFinite(start) ? start : 50 };
   };
 
   document.addEventListener("pointerdown", (event) => {
     const target = managed(event.target);
     if (!target) return;
     suppressTap = false;
-    dispatch(target, "touchstart", {}, true, touchesOf(event));
+    dispatch(target, "touchstart", {}, true, touchesOf(event, target));
     for (let el: Element | undefined = target; el; el = managedParent(el)) {
       const hover = hoverOf(el);
       if (hover) {
-        el.classList.add(...hover.classes);
-        hovered.push({ el, ...hover });
+        const entry = {
+          el,
+          classes: hover.classes,
+          stay: hover.stay,
+          shown: false,
+        } as (typeof hovered)[number];
+        entry.timer = setTimeout(() => showHover(entry), hover.start);
+        hovered.push(entry);
       }
       if (states.get(el)?.props["hover-stop-propagation"]) break;
     }
@@ -627,22 +929,43 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         const detail = { x: event.pageX, y: event.pageY };
         if (dispatch(target, "longpress", detail, true)) suppressTap = true;
         dispatch(target, "longtap", detail, true);
+        if (
+          target.localName === "wx-image" &&
+          states.get(target)?.props["show-menu-by-longpress"]
+        ) {
+          suppressTap = true;
+          post({ type: "imageMenu" });
+        }
       }, 350),
     };
   });
   document.addEventListener("pointermove", (event) => {
     if (!pressed) return;
-    if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 10)
+    if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 10) {
       clearTimeout(pressed.timer);
-    dispatch(pressed.target, "touchmove", {}, true, touchesOf(event));
+      // Moving the finger, such as to scroll a list, cancels the hover state
+      for (const { el, classes, timer, shown } of hovered) {
+        clearTimeout(timer);
+        if (shown) el.classList.remove(...classes);
+      }
+      hovered = [];
+    }
+    dispatch(pressed.target, "touchmove", {}, true, touchesOf(event, pressed.target));
   });
   const release = (name: string) => (event: PointerEvent) => {
     if (!pressed) return;
     clearTimeout(pressed.timer);
-    dispatch(pressed.target, name, {}, true, touchesOf(event));
+    dispatch(pressed.target, name, {}, true, touchesOf(event, pressed.target));
     pressed = undefined;
-    for (const { el, classes, stay } of hovered)
-      setTimeout(() => el.classList.remove(...classes), stay);
+    for (const entry of hovered) {
+      // A tap shorter than the start time still shows the hover state for its stay time
+      if (!entry.shown) showHover(entry);
+      const { el, classes, stay } = entry;
+      hoverRemovals.set(
+        el,
+        setTimeout(() => el.classList.remove(...classes), stay),
+      );
+    }
     hovered = [];
   };
   document.addEventListener("pointerup", release("touchend"));
@@ -656,7 +979,12 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       return;
     }
     if (!isDisabled(target.closest("wx-button"))) {
-      dispatch(target, "tap", { x: event.pageX, y: event.pageY }, true, touchesOf(event));
+      // A component may tell where the tap was in its own terms, such as a map's coordinates
+      const detail = (target as Partial<BuiltinElement>).omrTapDetail?.(event) ?? {
+        x: event.pageX,
+        y: event.pageY,
+      };
+      dispatch(target, "tap", detail, true, touchesOf(event, target));
     }
     afterTap(target);
   });
@@ -666,8 +994,94 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     "omr-event",
     (event) => {
       const target = managed(event.target);
-      const { name, detail } = (event as CustomEvent<OmrEventDetail>).detail;
-      if (target) dispatch(target, name, detail, false);
+      const { name, detail, fields = {} } = (event as CustomEvent<OmrEventDetail>).detail;
+      if (!target) return;
+      // A bindinput handler may return the field's new value, so the input waits for its answer
+      const handled =
+        name === "input" &&
+        /^WX-(INPUT|TEXTAREA)$/.test(target.tagName) &&
+        states.get(target)?.events.some((binding) => binding.name === "input" && binding.handler);
+      if (!handled) {
+        dispatch(target, name, detail, false, fields);
+        return;
+      }
+      const replyId = ++nextReplyId;
+      inputReplies.set(replyId, { input: target as BuiltinElement, value: toText(detail.value) });
+      latestReplies.set(target, replyId);
+      dispatch(target, name, detail, false, {}, replyId);
+    },
+    true,
+  );
+
+  /** Inputs waiting for their bindinput handler's result, with the value the handler saw. */
+  const inputReplies = new Map<number, { input: BuiltinElement; value: string }>();
+  /** The reply each input waits for: the one to its latest edit. */
+  const latestReplies = new WeakMap<Element, number>();
+  let nextReplyId = 0;
+
+  // A focused <input> or <textarea> raises the simulated keyboard: the page moves up so the
+  // field and its cursor-spacing stay above it (adjust-position), keyboard-accessory shows on
+  // top of it, and the field and wx.onKeyboardHeightChange hear its height
+  const keyboardHeight = options.keyboardHeight ?? 0;
+  let keyboardInput: BuiltinElement | undefined;
+  let keyboardUp = false;
+  const accessoryOf = (input: Element) =>
+    input.querySelector<HTMLElement>(":scope > wx-keyboard-accessory");
+  const lowerKeyboard = (input: BuiltinElement) => {
+    accessoryOf(input)?.classList.remove("omr-keyboard-accessory-shown");
+    if (keyboardInput !== input) return;
+    keyboardInput = undefined;
+    // Focus moving to another field keeps the keyboard up
+    setTimeout(() => {
+      if (keyboardInput || !keyboardUp) return;
+      keyboardUp = false;
+      emit(input, "keyboardheightchange", { height: 0, duration: 0.25 });
+      post({ type: "keyboard", height: 0, offset: 0 });
+    }, 0);
+  };
+  document.addEventListener("omr-keyboard", (event) => {
+    const detail = (
+      event as CustomEvent<{ input: BuiltinElement; focused: boolean; height: number }>
+    ).detail;
+    const { input, focused } = detail;
+    if (!keyboardHeight) return;
+    if (!focused) {
+      lowerKeyboard(input);
+      return;
+    }
+    keyboardInput = input;
+    keyboardUp = true;
+    detail.height = keyboardHeight;
+    const props = states.get(input)?.props ?? {};
+    const adjust = props["adjust-position"] === undefined || Boolean(props["adjust-position"]);
+    const spacing = lengthOf(props["cursor-spacing"], 0);
+    // The accessory rises with the keyboard, so the field stays above both
+    const accessory = accessoryOf(input);
+    accessory?.classList.add("omr-keyboard-accessory-shown");
+    const covered = keyboardHeight + (accessory?.offsetHeight ?? 0);
+    const { top, bottom } = input.getBoundingClientRect();
+    // The page moves up only as far as the field's bottom needs, and never past the field's top
+    const offset = adjust
+      ? Math.max(0, Math.min(top, bottom + spacing - (window.innerHeight - covered)))
+      : 0;
+    if (accessory) accessory.style.bottom = `${keyboardHeight - offset}px`;
+    emit(input, "keyboardheightchange", { height: keyboardHeight, duration: 0.25 });
+    post({ type: "keyboard", height: keyboardHeight, offset: Math.round(offset) });
+  });
+  // Taps on a keyboard-accessory, or on the page while a hold-keyboard field has focus, keep the keyboard up
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      if (!keyboardInput || !(event.target instanceof Element)) return;
+      const target = event.target;
+      if (target.closest("wx-keyboard-accessory")) {
+        event.preventDefault();
+      } else if (
+        states.get(keyboardInput)?.props["hold-keyboard"] &&
+        !target.closest("input, textarea, [contenteditable]")
+      ) {
+        event.preventDefault();
+      }
     },
     true,
   );
@@ -684,12 +1098,118 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
   // <camera> asks the logic layer for scope.camera when it is inserted
   const cameras = new Map<number, BuiltinElement>();
   document.addEventListener("omr-camera", (event) => {
-    const { camera, mounted } = (
-      event as CustomEvent<{ camera: BuiltinElement & { cameraId: number }; mounted: boolean }>
+    const { camera, mounted, mode, frameSize } = (
+      event as CustomEvent<{
+        camera: BuiltinElement & { cameraId: number };
+        mounted: boolean;
+        mode: string;
+        frameSize: string;
+      }>
     ).detail;
     if (mounted) cameras.set(camera.cameraId, camera);
     else cameras.delete(camera.cameraId);
-    post({ type: "camera", cameraId: camera.cameraId, mounted });
+    post({ type: "camera", cameraId: camera.cameraId, mounted, mode, frameSize });
+  });
+
+  // <live-pusher> asks the logic layer for the camera and the microphone when it is inserted
+  const pushers = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-live-pusher", (event) => {
+    const { pusher, mounted } = (
+      event as CustomEvent<{ pusher: BuiltinElement & { pusherId: number }; mounted: boolean }>
+    ).detail;
+    if (mounted) pushers.set(pusher.pusherId, pusher);
+    else pushers.delete(pusher.pusherId);
+    post({ type: "livePusher", pusherId: pusher.pusherId, mounted });
+  });
+
+  // <voip-room> asks the logic layer which member of the video room it shows
+  const voipRooms = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-voip-room", (event) => {
+    const { room, mounted, openid, mode } = (
+      event as CustomEvent<{
+        room: BuiltinElement & { roomId: number };
+        mounted: boolean;
+        openid?: string;
+        mode?: string;
+      }>
+    ).detail;
+    if (mounted) voipRooms.set(room.roomId, room);
+    else voipRooms.delete(room.roomId);
+    post({ type: "voipRoom", roomId: room.roomId, mounted, openid, mode });
+  });
+
+  // <official-account> asks the logic layer whether the launch scene lets it show
+  const officialAccounts = new Map<number, BuiltinElement>();
+  document.addEventListener("omr-official-account", (event) => {
+    const { account } = (event as CustomEvent<{ account: BuiltinElement & { accountId: number } }>)
+      .detail;
+    officialAccounts.set(account.accountId, account);
+    post({ type: "officialAccount", accountId: account.accountId });
+  });
+
+  // Pull-down refresh: the page slides down over the window background, which shows three dots
+  const pullDown = createPullDown(bundle.window, () => post({ type: "pullDownRefresh" }));
+
+  // <navigation-bar> is applied by the shell; <page-meta>'s window background by the view itself
+  // Open page containers, last opened last: a return closes the latest
+  const openContainers: (HTMLElement & { omrClose(): void })[] = [];
+  document.addEventListener("omr-page-container", (event) => {
+    const container = event.target as HTMLElement & { omrClose(): void };
+    const index = openContainers.indexOf(container);
+    if (index !== -1) openContainers.splice(index, 1);
+    if ((event as CustomEvent<{ open: boolean }>).detail.open) openContainers.push(container);
+    post({ type: "pageContainer", open: openContainers.length > 0 });
+  });
+  /** After a render: an open container that `wx:if` removed no longer holds a return. */
+  const dropRemovedContainers = () => {
+    const count = openContainers.length;
+    for (let i = openContainers.length - 1; i >= 0; i--) {
+      if (!openContainers[i]!.isConnected) openContainers.splice(i, 1);
+    }
+    if (openContainers.length !== count)
+      post({ type: "pageContainer", open: openContainers.length > 0 });
+  };
+
+  document.addEventListener("omr-page-config", (event) => {
+    const { navigationBar, pageMeta } = (
+      event as CustomEvent<{
+        navigationBar?: Record<string, unknown>;
+        pageMeta?: Record<string, unknown>;
+      }>
+    ).detail;
+    if (navigationBar) post({ type: "navigationBar", attributes: navigationBar });
+    if (pageMeta) {
+      const text = (name: string) =>
+        typeof pageMeta[name] === "string" ? (pageMeta[name] as string) : undefined;
+      pullDown.background({
+        color: text("background-color"),
+        top: text("background-color-top"),
+        textStyle: text("background-text-style"),
+      });
+    }
+  });
+
+  // A full-screen <video> asks the shell to grow the page's window over its chrome. That
+  // window is the video's, not the page's: its resize, and the one back, are not the page's
+  const fullScreenVideos = new Set<Element>();
+  document.addEventListener("omr-video-fullscreen", (event) => {
+    const { video, fullScreen } = (event as CustomEvent<{ video: Element; fullScreen: boolean }>)
+      .detail;
+    const before = fullScreenVideos.size > 0;
+    if (fullScreen) fullScreenVideos.add(video);
+    else fullScreenVideos.delete(video);
+    if (before !== fullScreenVideos.size > 0)
+      post({ type: "videoFullScreen", fullScreen: !before });
+  });
+  let windowSize = `${window.innerWidth}x${window.innerHeight}`;
+  window.addEventListener("resize", () => {
+    const size = `${window.innerWidth}x${window.innerHeight}`;
+    if (fullScreenVideos.size > 0 || size === windowSize) return;
+    windowSize = size;
+    post({
+      type: "resize",
+      size: { windowWidth: window.innerWidth, windowHeight: window.innerHeight },
+    });
   });
 
   let scrollQueued = false;
@@ -748,6 +1268,43 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         );
       }
     }
+    if (fields.node) {
+      const canvasNodeId = (el as Partial<CanvasElement> | null)?.canvasNodeId;
+      const settings = (el as Partial<BuiltinElement> | null)?.omrSettings?.();
+      result.node =
+        canvasNodeId !== undefined
+          ? { canvasNodeId, width: el!.clientWidth, height: el!.clientHeight }
+          : el && settings
+            ? {
+                // A ScrollViewContext: the logic layer calls this very element back
+                scrollView: {
+                  tag: el.localName.slice(3),
+                  id: el.id,
+                  scopeNodeId: states.get(el)!.ownerId,
+                  nodeKey: keyOf(el),
+                  settings,
+                },
+              }
+            : null;
+    }
+    if (fields.context) {
+      // What the node is, so the logic layer builds its context, such as an EditorContext
+      const state = el ? states.get(el) : undefined;
+      result.context =
+        el && state && el.localName.startsWith("wx-")
+          ? {
+              tag: el.localName.slice(3),
+              id: el.id,
+              scopeNodeId: state.ownerId,
+              nodeKey: keyOf(el),
+              canvasId:
+                state.props["canvas-id"] === undefined
+                  ? undefined
+                  : toText(state.props["canvas-id"]),
+              canvasType: state.props.type ? toText(state.props.type) : undefined,
+            }
+          : null;
+    }
     if (fields.properties && el) {
       const props = states.get(el)?.props ?? {};
       for (const name of fields.properties) {
@@ -758,26 +1315,62 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
     return result;
   };
 
+  /** Keys of elements a selector query handed to the logic layer, which calls them back by key. */
+  const nodeKeys = new WeakMap<Element, number>();
+  const keyedNodes = new Map<number, WeakRef<Element>>();
+  const keyOf = (el: Element) => {
+    let key = nodeKeys.get(el);
+    if (key === undefined) {
+      key = keyedNodes.size + 1;
+      nodeKeys.set(el, key);
+      keyedNodes.set(key, new WeakRef(el));
+    }
+    return key;
+  };
+
+  /**
+   * The rendered elements a selector matches in a scope's template, in
+   * document order. Only `>>>` reaches into the templates of components.
+   */
+  const selectIn = (scope: Scope, selector: string): Element[] => {
+    const crossing = selector.includes(">>>");
+    let css = selector.replace(/>>>/g, " ");
+    // A component's classes carry its prefix
+    if (scope.owner) css = css.replace(/\.(-?[_a-zA-Z][\w-]*)/g, `.${scope.def.prefix}--$1`);
+    try {
+      return [...scope.root.querySelectorAll(css)].filter((el) => {
+        const state = states.get(el);
+        return state !== undefined && (crossing || state.ownerId === scope.nodeId);
+      });
+    } catch {
+      console.error(`[omr] invalid selector "${selector}"`);
+      return [];
+    }
+  };
+
   const runQuery = (request: SelectorQueryRequest): unknown => {
     const scope = scopes.get(request.scopeNodeId);
     if (request.selector === null) return queryFields(null, request.fields);
     if (!scope) return request.all ? [] : null;
-    let selector = request.selector.replace(/>>>/g, " ");
-    // A component's classes carry its prefix
-    if (scope.owner)
-      selector = selector.replace(/\.(-?[_a-zA-Z][\w-]*)/g, `.${scope.def.prefix}--$1`);
-    let found: Element[] = [];
-    try {
-      found = [...scope.root.querySelectorAll(selector)].filter((el) => states.has(el));
-    } catch {
-      console.error(`[omr] invalid selector "${request.selector}"`);
-    }
+    const found = selectIn(scope, request.selector);
     return request.all
       ? found.map((el) => queryFields(el, request.fields))
       : found[0]
         ? queryFields(found[0], request.fields)
         : null;
   };
+
+  // Intersection and media query observers
+  const observers = createObservers({
+    select: (scopeNodeId, selector) => {
+      const scope = scopes.get(scopeNodeId);
+      if (!scope) return null;
+      if (!scope.initialized || !scope.root.isConnected) return undefined;
+      return selectIn(scope, selector);
+    },
+    describe: (el) => ({ id: el.id, dataset: datasetOf(states.get(el)?.props ?? {}) }),
+    post,
+  });
 
   post({ type: "ready" });
 
@@ -791,7 +1384,13 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "setData": {
         const scope = scopes.get(message.nodeId);
         if (scope) {
-          for (const [key, value] of Object.entries(message.patch)) setPath(scope.data, key, value);
+          const written = new Set(scope.written);
+          for (const [key, value] of Object.entries(message.patch)) {
+            setPath(scope.data, key, value);
+            // `list[0].name` and `user.name` write `list` and `user`
+            written.add(key.split(/[.[]/, 1)[0]!);
+          }
+          scope.written = written;
           dirty.add(scope);
         }
         break;
@@ -802,10 +1401,68 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
           scope.data = message.data;
           scope.options = message.options;
           scope.initialized = true;
+          if (message.options.virtualHost) {
+            scope.root.setAttribute(VIRTUAL_ATTRIBUTE, "");
+            scope.root.removeAttribute("class");
+            scope.root.removeAttribute("style");
+          }
           dirty.add(scope);
         }
         break;
       }
+      case "canvasFrame":
+        canvasElements.get(message.canvasNodeId)?.omrDraw(message.bitmap);
+        return;
+      case "eventResult": {
+        const pending = inputReplies.get(message.replyId);
+        inputReplies.delete(message.replyId);
+        // Typing that came after the event wins over the handler's late answer, even typing that came back to the same text
+        if (
+          pending &&
+          message.value !== undefined &&
+          latestReplies.get(pending.input) === message.replyId &&
+          pending.input.omrFormValue?.() === pending.value
+        ) {
+          pending.input.omrReplaceValue?.(message.value);
+        }
+        return;
+      }
+      case "closePageContainer":
+        openContainers.at(-1)?.omrClose();
+        return;
+      case "pageVisibility":
+        if (message.background === true) setAppBackground(!message.visible);
+        for (const live of document.querySelectorAll("wx-live-player, wx-live-pusher")) {
+          (live as Partial<BuiltinElement>).omrPageVisibility?.(
+            message.visible,
+            message.background === true,
+          );
+        }
+        // auto-pause-if-navigate, true by default: a hidden page's videos pause
+        if (!message.visible) {
+          for (const video of document.getElementsByTagName("wx-video")) {
+            const props = states.get(video)?.props ?? {};
+            if (
+              props["auto-pause-if-navigate"] === false ||
+              props["auto-pause-if-navigate"] === "false"
+            ) {
+              continue;
+            }
+            void (video as Partial<BuiltinElement>).omrCall?.("pause", []);
+          }
+        }
+        return;
+      case "pullDownRefresh":
+        pullDown.set(message.refreshing);
+        return;
+      case "background":
+        pullDown.background(message);
+        return;
+      case "backToTop":
+        for (const el of document.querySelectorAll("wx-scroll-view")) {
+          (el as { omrBackToTop?(): void }).omrBackToTop?.();
+        }
+        return;
       case "pageScrollTo":
         window.scrollTo({
           top: message.scrollTop,
@@ -815,9 +1472,41 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
       case "fillNickname":
         nicknameInput?.omrFill?.(message.value);
         return;
-      case "cameraState":
-        cameras.get(message.cameraId)?.omrCameraState?.(message.error);
+      case "officialAccountState":
+        officialAccounts.get(message.accountId)?.omrAccountState?.(message);
+        officialAccounts.delete(message.accountId);
         return;
+      case "cameraState":
+        cameras.get(message.cameraId)?.omrCameraState?.(message);
+        return;
+      case "livePusherState":
+        pushers.get(message.pusherId)?.omrLivePusherState?.(message);
+        return;
+      case "voipRoomState":
+        voipRooms.get(message.roomId)?.omrVoipRoomState?.(message);
+        return;
+      case "animate":
+      case "clearAnimation": {
+        const run = () => {
+          const scope = scopes.get(message.scopeNodeId);
+          const elements = scope ? selectIn(scope, message.selector) : [];
+          const done = () => post({ type: "animationDone", animationId: message.animationId });
+          if (elements.length === 0) {
+            console.warn(`[omr] this.${message.type}: nothing matches "${message.selector}"`);
+          }
+          if (message.type === "animate") {
+            animations.animate(elements, message.keyframes, message.duration, done);
+          } else {
+            animations.clear(elements, message.properties);
+            done();
+          }
+        };
+        // The elements may be in a render still to come, such as the first one after onLoad
+        const scope = scopes.get(message.scopeNodeId);
+        if (scope && (scheduled || !scope.initialized)) afterRender.push(run);
+        else run();
+        return;
+      }
       case "query":
         post({
           type: "queryResult",
@@ -825,8 +1514,163 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
           results: message.requests.map(runQuery),
         });
         return;
+      case "viewRequest": {
+        const reply = (result?: Record<string, unknown>, error?: string) =>
+          post({ type: "viewReply", requestId: message.requestId, result, error });
+        void answerRequest(message.request, options.assetBase).then(
+          (result) => reply(result),
+          (error: unknown) =>
+            reply(undefined, error instanceof Error ? error.message : String(error)),
+        );
+        return;
+      }
+      case "callBuiltin": {
+        // A context such as VideoContext drives the component with its id in the caller's
+        // template; the call runs after the renders that come before it
+        const { callId, target } = message;
+        void Promise.resolve()
+          .then(() => {
+            const keyed =
+              target.nodeKey === undefined ? undefined : keyedNodes.get(target.nodeKey)?.deref();
+            const el = (
+              target.nodeKey !== undefined
+                ? keyed?.isConnected
+                  ? keyed
+                  : undefined
+                : [
+                    ...(scopes
+                      .get(target.scopeNodeId)
+                      ?.root.getElementsByTagName(`wx-${target.tag}`) ?? []),
+                  ].find(
+                    (el) =>
+                      target.id === undefined ||
+                      (el.id === target.id && states.get(el)?.ownerId === target.scopeNodeId),
+                  )
+            ) as Partial<BuiltinElement> | undefined;
+            if (!el?.omrCall) throw new Error(`no <${target.tag}> found`);
+            // Sources a context passes, such as EditorContext.insertImage's, resolve like the template's,
+            // and its selectors, such as ScrollViewContext.scrollIntoView's, match in that template
+            const scope = scopes.get(target.scopeNodeId);
+            if ("omrResolveAsset" in el && scope) {
+              el.omrResolveAsset = (src: string) => env.resolveAsset(src, scope.def.template);
+            }
+            if (scope) el.omrSelect = (selector: string) => selectIn(scope, selector);
+            return el.omrCall(message.method, message.args);
+          })
+          .then(
+            (result) => post({ type: "builtinResult", callId, result: result ?? {} }),
+            (error: unknown) =>
+              post({
+                type: "builtinResult",
+                callId,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+          );
+        return;
+      }
+      case "observeIntersection":
+      case "observeMediaQuery":
+      case "unobserve":
+        // Observations start after the renders that come before them
+        observers.receive(message);
+        schedule();
+        return;
     }
     pendingSeq = Math.max(pendingSeq, message.seq);
     schedule();
   };
+}
+
+const PULL_DOWN_CSS = `
+.omr-refresh { position: fixed; top: 0; left: 0; right: 0; z-index: -1; display: flex; align-items: center; justify-content: center; gap: 6px; height: 0; overflow: hidden; }
+.omr-refresh i { width: 6px; height: 6px; border-radius: 50%; background: rgba(0, 0, 0, 0.3); }
+.omr-refresh[data-text-style="light"] i { background: rgba(255, 255, 255, 0.8); }
+.omr-refresh.omr-refreshing i { animation: omr-refresh-dot 1.2s ease-in-out infinite; }
+.omr-refresh.omr-refreshing i:nth-child(2) { animation-delay: 0.2s; }
+.omr-refresh.omr-refreshing i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes omr-refresh-dot { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+/* The page covers the backdrop until it is pulled down */
+body { position: relative; background: #fff; }
+`;
+
+/** How far the page must be pulled before release starts a refresh, and where it rests while refreshing. */
+const PULL_THRESHOLD = 50;
+const PULL_MAX = 100;
+
+/**
+ * The pull-down refresh of a page with `enablePullDownRefresh`: pulling the
+ * page down at the top uncovers the window background with three loading
+ * dots, and letting go past the threshold refreshes until `stopPullDownRefresh`.
+ */
+function createPullDown(win: Record<string, unknown>, onRefresh: () => void) {
+  const str = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const backdrop = document.createElement("div");
+  backdrop.className = "omr-refresh";
+  backdrop.innerHTML = "<i></i><i></i><i></i>";
+  document.documentElement.append(backdrop);
+  const paint = (options: { color?: string; top?: string; textStyle?: string }) => {
+    const color = str(options.top) ?? str(options.color);
+    if (color) backdrop.style.background = color;
+    if (options.textStyle === "dark" || options.textStyle === "light") {
+      backdrop.dataset.textStyle = options.textStyle;
+    }
+  };
+  paint({
+    color: str(win.backgroundColorTop) ?? str(win.backgroundColor) ?? "#ffffff",
+    textStyle: str(win.backgroundTextStyle) ?? "dark",
+  });
+
+  let offset = 0;
+  let refreshing = false;
+  const move = (value: number, animate: boolean) => {
+    offset = value;
+    const body = document.body.style;
+    body.transition = animate ? "transform 0.3s" : "none";
+    body.transform = value ? `translateY(${value}px)` : "";
+    backdrop.style.height = `${value}px`;
+    backdrop.classList.toggle("omr-refreshing", refreshing);
+  };
+  const set = (value: boolean) => {
+    if (value === refreshing) return;
+    refreshing = value;
+    move(value ? PULL_THRESHOLD : 0, true);
+    if (value) onRefresh();
+  };
+
+  if (win.enablePullDownRefresh === true) {
+    let start: { y: number; pointerId: number } | undefined;
+    /** Whether the last press pulled the page, so its click is not a tap. */
+    let pulled = false;
+    document.addEventListener("pointerdown", (event) => {
+      pulled = false;
+      if (refreshing || window.scrollY > 0) return;
+      start = { y: event.clientY, pointerId: event.pointerId };
+    });
+    document.addEventListener("pointermove", (event) => {
+      if (!start || event.pointerId !== start.pointerId) return;
+      const distance = event.clientY - start.y;
+      // Resistance grows as the page is pulled further
+      move(distance > 0 ? Math.min(PULL_MAX, distance * 0.5) : 0, false);
+    });
+    const release = (event: PointerEvent) => {
+      if (!start || event.pointerId !== start.pointerId) return;
+      start = undefined;
+      pulled = offset > 0;
+      if (offset >= PULL_THRESHOLD) set(true);
+      else move(0, true);
+    };
+    // Letting go after a pull is not a tap
+    window.addEventListener(
+      "click",
+      (event) => {
+        if (!pulled) return;
+        pulled = false;
+        event.stopPropagation();
+      },
+      true,
+    );
+    document.addEventListener("pointerup", release);
+    document.addEventListener("pointercancel", release);
+  }
+  return { set, background: paint };
 }

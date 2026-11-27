@@ -2,45 +2,35 @@
 import { ANONYMOUS_NICKNAME, DEFAULT_AVATAR, encodeCode, resolveUser } from "./auth.ts";
 import type { CodePayload } from "./auth.ts";
 import { toJsonValue } from "./data.ts";
+import {
+  ApiError,
+  asyncApi,
+  hasTapGesture,
+  requireTapGesture,
+  safeCall,
+  type AnyFunction,
+  type Options,
+} from "./api/common.ts";
+import type { ApiContext, WxHost } from "./api/context.ts";
+import { createCanvasApis } from "./api/canvas.ts";
+import { createDeviceApis, scannedCode } from "./api/device.ts";
+import { createFileApis, createTempFiles } from "./api/files.ts";
+import { createInterfaceApis } from "./api/interface.ts";
+import { createMediaApis } from "./api/media.ts";
+import { createContextApis } from "./api/contexts.ts";
+import { createVoipApis } from "./api/voip.ts";
+import { createAnimationApis } from "./api/animation.ts";
+import { createNetworkApis } from "./api/network.ts";
+import { createAppApis } from "./api/app.ts";
+import { createObserverApis } from "./api/observers.ts";
+import { createWebViewApis } from "./api/web-view.ts";
 import type {
-  LogicToView,
-  Manifest,
-  MenuButtonRect,
+  ContextNode,
   PermissionKind,
+  ScrollViewNode,
   SelectorQueryRequest,
   SystemInfo,
 } from "./protocol.ts";
-
-type AnyFunction = (...args: any[]) => any;
-type Options = Record<string, any> & {
-  success?: AnyFunction;
-  fail?: AnyFunction;
-  complete?: AnyFunction;
-};
-
-/** The simulator endpoint that performs `wx.request` for the logic layer, avoiding CORS. */
-export const REQUEST_PROXY_PATH = "/__omr/request";
-
-export interface WxHost {
-  manifest: Manifest;
-  system: SystemInfo;
-  menuButton: MenuButtonRect;
-  /** Mutable; call `saveStorage` after changing it. */
-  storage: Record<string, unknown>;
-  saveStorage(): void;
-  launchOptions: Record<string, unknown>;
-  /** Shows native UI in the shell, such as a toast or a consent dialog, and resolves with its result. */
-  ui(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
-  navigate(openType: string, options: { url?: string; delta?: number }): void;
-  topWebviewId(): number | undefined;
-  scopeOf(instance: object): { webviewId: number; nodeId: number } | undefined;
-  query(webviewId: number, requests: SelectorQueryRequest[]): Promise<unknown[]>;
-  sendView(webviewId: number, message: LogicToView): void;
-  /** How far the current page's window starts below the screen top and ends above its bottom. */
-  windowInsets(): { top: number; bottom: number };
-  /** Shows in the capsule which capabilities are in use. */
-  setPermissionsInUse(kinds: PermissionKind[]): void;
-}
 
 /** Descriptions WeChat shows in `wx.authorize` dialogs, by scope. */
 export const SCOPE_DESCRIPTIONS: Record<string, string> = {
@@ -60,96 +50,6 @@ export const SCOPE_DESCRIPTIONS: Record<string, string> = {
   "scope.userInfo": "获取你的昵称、头像",
 };
 
-/** An API failure; `errno` is set where WeChat sets one. */
-class ApiError extends Error {
-  readonly errno?: number;
-  constructor(message: string, errno?: number) {
-    super(message);
-    this.errno = errno;
-  }
-}
-
-/**
- * Whether code runs in response to a user tap. WeChat keeps this state for the
- * tap handler and its microtasks, loses it after `setTimeout`, and passes it on
- * to the callbacks of a few APIs such as `wx.login`.
- */
-let tapGesture = false;
-let tapGestureReset: ReturnType<typeof setTimeout> | undefined;
-
-/** Runs a tap or button open-type handler with the tap state. */
-export function runWithTapGesture(run: () => void) {
-  tapGesture = true;
-  // The state ends with the current macrotask; entering it again from a microtask does not extend it
-  tapGestureReset ??= setTimeout(() => {
-    tapGesture = false;
-    tapGestureReset = undefined;
-  }, 0);
-  run();
-}
-
-/** Calls API callbacks, with the tap state when the call was made with it. */
-function respond(callbacks: (AnyFunction | undefined)[], result: unknown, tapped: boolean) {
-  const call = () => callbacks.forEach((callback) => safeCall(callback, result));
-  if (tapped) runWithTapGesture(call);
-  else call();
-}
-
-const requireTapGesture = () => {
-  if (!tapGesture) throw new Error("can only be invoked by user TAP gesture.");
-};
-
-interface AsyncApiOptions {
-  /** False for APIs that return no Promise when called without callbacks. */
-  promise?: boolean;
-  /** Whether callbacks keep the tap state of the call. */
-  passesTapGesture?: boolean;
-}
-
-/** Calls an async API implementation with WeChat's callback and Promise conventions. */
-function asyncApi(
-  name: string,
-  impl: (options: Options) => Promise<Record<string, unknown>>,
-  { promise: returnsPromise = true, passesTapGesture = false }: AsyncApiOptions = {},
-) {
-  return (options: Options = {}) => {
-    const tapped = tapGesture;
-    const promise = Promise.resolve()
-      .then(() => impl(options))
-      .then(
-        (result) => ({ errMsg: `${name}:ok`, ...result }),
-        (error: unknown) => {
-          const reason = error instanceof Error ? error.message : String(error);
-          const errno = error instanceof ApiError ? error.errno : undefined;
-          throw {
-            errMsg: `${name}:fail ${reason}`.trimEnd(),
-            ...(errno === undefined ? {} : { errno }),
-          };
-        },
-      );
-    if (!options.success && !options.fail && !options.complete) {
-      if (returnsPromise) return promise;
-      promise.catch(() => {});
-      return undefined;
-    }
-    const keepTap = passesTapGesture && tapped;
-    promise.then(
-      (result) => respond([options.success, options.complete], result, keepTap),
-      (error) => respond([options.fail, options.complete], error, keepTap),
-    );
-    return undefined;
-  };
-}
-
-function safeCall(fn: AnyFunction | undefined, arg: unknown) {
-  if (typeof fn !== "function") return;
-  try {
-    fn(arg);
-  } catch (error) {
-    console.error("[omr] error in API callback:", error);
-  }
-}
-
 /** Scopes `wx.authorize` no longer asks for: the APIs are called directly, or the data is withdrawn. */
 const SCOPES_WITHOUT_AUTHORIZATION = new Set([
   "scope.address",
@@ -159,6 +59,20 @@ const SCOPES_WITHOUT_AUTHORIZATION = new Set([
 ]);
 
 /** The order of the capsule's in-use icons. */
+/** Scenes that let `<official-account>` show, and scenes coming back to the app that keep it. */
+const OFFICIAL_ACCOUNT_LAUNCH_SCENES = new Set([1011, 1017, 1025, 1047, 1124]);
+const OFFICIAL_ACCOUNT_RETURN_SCENES = new Set([1001, 1038, 1041, 1089, 1090, 1104, 1131, 1187]);
+/** The `binderror` reasons of `<official-account>` by `status`, as WeChat documents them. */
+const OFFICIAL_ACCOUNT_ERRORS: Record<number, string> = {
+  [-2]: "网络错误",
+  [-1]: "数据解析错误",
+  1: "小程序关注公众号功能被封禁",
+  2: "关联公众号被封禁",
+  3: "关联关系解除或未选中关联公众号",
+  4: "未开启关注公众号功能",
+  5: "场景值错误",
+  6: "重复创建",
+};
 const PERMISSION_KINDS: PermissionKind[] = ["camera", "record", "location"];
 /** How long the capsule shows the location icon after a one-off `wx.getLocation`. */
 const LOCATION_IN_USE_MS = 3000;
@@ -173,6 +87,27 @@ const PRIVACY_REFUSAL_QUIET_MS = 10_000;
 
 export function createWx(host: WxHost) {
   const { manifest } = host;
+  const files = createTempFiles(host.fs);
+  /**
+   * WeChat gives the avatar the user picked as a temporary file, which
+   * `wx.uploadFile` can send; a data URL or a package file becomes one.
+   * Other URLs, such as https, stay as they are.
+   */
+  const avatarFile = (url: string): string => {
+    const data = /^data:image\/([\w+.-]+)(;base64)?,(.*)$/s.exec(url);
+    let bytes: Uint8Array | undefined;
+    let extension = "png";
+    if (data) {
+      extension = data[1] === "svg+xml" ? "svg" : data[1]!;
+      bytes = data[2]
+        ? Uint8Array.from(atob(data[3]!), (char) => char.charCodeAt(0))
+        : new TextEncoder().encode(decodeURIComponent(data[3]!));
+    } else if (!/^[a-z][\w+.-]*:/i.test(url)) {
+      bytes = files.read(url.replace(/^\/+/, ""));
+      extension = /\.(\w+)$/.exec(url)?.[1] ?? "png";
+    }
+    return bytes ? files.writeTemp(bytes, extension) : url;
+  };
   const authConfig = manifest.config.auth ?? {};
   const user = resolveUser(authConfig.user);
   const authSetting: Record<string, boolean> = { ...authConfig.authSetting };
@@ -277,27 +212,81 @@ export function createWx(host: WxHost) {
   });
 
   /** Asks for a scope the way `wx.authorize` does; resolves whether it is granted. */
-  const requestScope = async (scope: string) => {
-    if (authSetting[scope] !== undefined) return authSetting[scope];
-    const allowed = await askConsent("authorize", {
-      scope,
-      description: SCOPE_DESCRIPTIONS[scope] ?? scope,
-    });
-    authSetting[scope] = allowed;
-    return allowed;
+  const scopeRequests = new Map<string, Promise<boolean>>();
+  const requestScope = (scope: string): Promise<boolean> => {
+    if (authSetting[scope] !== undefined) return Promise.resolve(authSetting[scope]);
+    // Calls while the dialog is open wait for its answer instead of opening another
+    let pending = scopeRequests.get(scope);
+    if (!pending) {
+      pending = askConsent("authorize", {
+        scope,
+        description: SCOPE_DESCRIPTIONS[scope] ?? scope,
+      })
+        .then((allowed) => {
+          authSetting[scope] = allowed;
+          return allowed;
+        })
+        .finally(() => scopeRequests.delete(scope));
+      scopeRequests.set(scope, pending);
+    }
+    return pending;
   };
 
   const maskPhone = (phone: string) =>
     phone.length >= 7 ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone;
 
+  /** Base64 of `length` bytes derived from `seed`: stands in for ciphertext that is never decrypted. */
+  const opaqueBase64 = (seed: string, length: number) => {
+    let hash = 2166136261;
+    let binary = "";
+    for (let i = 0; i < length; i++) {
+      hash = Math.imul(hash ^ seed.charCodeAt(i % seed.length) ^ i, 16777619);
+      binary += String.fromCharCode(hash >>> 24);
+    }
+    return btoa(binary);
+  };
+
+  /**
+   * The settings page of `wx.openSetting` and the `openSetting` button: one switch per
+   * scope the Mini Program has asked for. Resolves with the settings once the user goes back.
+   */
+  const openSettingPage = async () => {
+    if (consent === "ask") {
+      const result = await host.ui("openSetting", {
+        appName: manifest.appName,
+        scopes: Object.entries(authSetting).map(([scope, allowed]) => ({
+          scope,
+          description: SCOPE_DESCRIPTIONS[scope] ?? scope,
+          allowed,
+        })),
+      });
+      const changed = (result.authSetting ?? {}) as Record<string, unknown>;
+      for (const [scope, allowed] of Object.entries(changed)) {
+        if (scope in authSetting && typeof allowed === "boolean") authSetting[scope] = allowed;
+      }
+    }
+    return { authSetting: { ...authSetting } };
+  };
+
+  /** Splits a Mini Program path such as `pages/a/a?id=7` into `path` and `query`, as `bindcontact` gives them. */
+  const splitPath = (url: string) => {
+    const mark = url.indexOf("?");
+    const query: Record<string, string> = {};
+    if (mark < 0) return { path: url, query };
+    for (const [name, value] of new URLSearchParams(url.slice(mark + 1))) query[name] = value;
+    return { path: url.slice(0, mark), query };
+  };
+
   /**
    * The detail of a button `open-type` event, or undefined when the event does
    * not fire. A combined open-type such as `getPhoneNumber|agreePrivacyAuthorization`
-   * arrives as one call per part, the agreement first.
+   * arrives as one call per part, the agreement first. `props` are the button
+   * attributes the open-type reads, such as `send-message-path` for `contact`.
    */
   const openTypeDetail = async (
     openType: string,
     buttonId: string,
+    props: Record<string, unknown> = {},
   ): Promise<Record<string, unknown> | undefined> => {
     switch (openType) {
       case "agreePrivacyAuthorization":
@@ -315,11 +304,17 @@ export function createWx(host: WxHost) {
           phoneNumber: maskPhone(user.phoneNumber),
         });
         if (!allowed) return { errMsg: `${openType}:fail user deny` };
+        const code = issueCode("phone", {
+          phoneNumber: user.phoneNumber,
+          countryCode: user.countryCode,
+        });
+        if (openType === "getRealtimePhoneNumber") return { code, errMsg: `${openType}:ok` };
+        // Code written before the code exchange checks the encrypted fields; they do not decrypt
         return {
-          code: issueCode("phone", {
-            phoneNumber: user.phoneNumber,
-            countryCode: user.countryCode,
-          }),
+          code,
+          encryptedData: opaqueBase64(code, 192),
+          iv: opaqueBase64(`iv:${code}`, 16),
+          cloudID: `01_${opaqueBase64(`cloud:${code}`, 48).replace(/[+/=]/g, "")}`,
           errMsg: `${openType}:ok`,
         };
       }
@@ -330,7 +325,7 @@ export function createWx(host: WxHost) {
           return undefined;
         }
         const allowed = await askConsent("chooseAvatar", { avatarUrl: user.avatarUrl });
-        return allowed ? { avatarUrl: user.avatarUrl } : undefined;
+        return allowed ? { avatarUrl: avatarFile(user.avatarUrl) } : undefined;
       }
       case "getUserInfo":
         try {
@@ -340,7 +335,42 @@ export function createWx(host: WxHost) {
         }
         return { ...userInfoResult(), errMsg: "getUserInfo:ok" };
       case "openSetting":
-        return { authSetting: { ...authSetting }, errMsg: "openSetting:ok" };
+        return { ...(await openSettingPage()), errMsg: "openSetting:ok" };
+      case "contact": {
+        // bindcontact fires when the user comes back, with the card they tapped in the chat
+        const attribute = (name: string) => {
+          const value = props[name];
+          return typeof value === "string" || typeof value === "number" ? String(value) : "";
+        };
+        const card = Boolean(props["show-message-card"]);
+        const result =
+          consent === "ask"
+            ? await host.ui("contact", {
+                appName: manifest.appName,
+                ...(card
+                  ? {
+                      card: {
+                        title: attribute("send-message-title"),
+                        img: attribute("send-message-img"),
+                        path: attribute("send-message-path"),
+                      },
+                    }
+                  : {}),
+              })
+            : {};
+        const tapped = card && result.tapped === true;
+        return {
+          ...splitPath(tapped ? attribute("send-message-path") : ""),
+          errMsg: "enterContact:ok",
+        };
+      }
+      case "launchApp":
+        // Only a Mini Program opened from an app (scene 1069) can go back to it; the view binds this to binderror
+        return { errMsg: "invalid scene" };
+      case "feedback":
+        // WeChat tells the Mini Program nothing about the feedback page
+        if (consent === "ask") void host.ui("feedback", { appName: manifest.appName });
+        return undefined;
       default:
         return {};
     }
@@ -454,10 +484,12 @@ export function createWx(host: WxHost) {
     haltRecorder();
     const { format, elapsed } = recording;
     recording = undefined;
+    // A silent file of about the size a recording of this length has
+    const fileSize = Math.round(elapsed * 4);
     emitRecorder("onStop", {
-      tempFilePath: `http://tmp/omr_${Math.random().toString(36).slice(2, 10)}.${format}`,
+      tempFilePath: files.writeTemp(new Uint8Array(fileSize), format),
       duration: elapsed,
-      fileSize: Math.round(elapsed * 4),
+      fileSize,
     });
   }
   const recorderManager = {
@@ -506,17 +538,35 @@ export function createWx(host: WxHost) {
     onInterruptionEnd() {},
   };
 
-  /** Releases of the `<camera>` components that show a preview, or undefined while they wait for authorization. */
-  const cameras = new Map<string, (() => void) | undefined>();
+  /** Each `<camera>` that is on a page, with the release of its preview once it shows one. */
+  type CameraEntry = {
+    webviewId: number;
+    cameraId: number;
+    frameSize?: string;
+    release?: () => void;
+    error?: string;
+  };
+  const cameras = new Map<string, CameraEntry>();
+  /** Whether the app is in the background, which stops every camera. */
+  let camerasStopped = false;
   /** A `<camera>` was inserted or removed; it needs the privacy agreement and `scope.camera`. */
-  const cameraMounted = async (webviewId: number, cameraId: number, mounted: boolean) => {
+  const cameraMounted = async (
+    webviewId: number,
+    cameraId: number,
+    mounted: boolean,
+    options: { mode?: string; frameSize?: string } = {},
+  ) => {
     const key = `${webviewId}:${cameraId}`;
-    if (!mounted) {
-      cameras.get(key)?.();
-      cameras.delete(key);
-      return;
-    }
-    cameras.set(key, undefined);
+    cameras.get(key)?.release?.();
+    cameras.delete(key);
+    if (!mounted) return;
+    // A camera moved in the DOM is removed and inserted again; only the latest insertion counts
+    const entry: CameraEntry = {
+      webviewId,
+      cameraId,
+      frameSize: options.frameSize,
+    };
+    cameras.set(key, entry);
     let error: string | undefined;
     try {
       await requirePrivacy("camera");
@@ -524,18 +574,112 @@ export function createWx(host: WxHost) {
     } catch (reason) {
       error = `insertCamera:fail ${(reason as Error).message}`;
     }
-    // Removed while it waited
-    if (!cameras.has(key)) return;
-    if (!error) cameras.set(key, holdPermission("camera"));
-    host.sendView(webviewId, { type: "cameraState", cameraId, error });
+    if (cameras.get(key) !== entry) return;
+    entry.error = error;
+    if (!error) entry.release = holdPermission("camera");
+    host.sendView(webviewId, {
+      type: "cameraState",
+      cameraId,
+      error,
+      ...(!error && options.mode === "scanCode" ? { scan: cameraScan() } : {}),
+      ...(!error && camerasStopped ? { stopped: true } : {}),
+    });
+  };
+  /** The `scancode` detail of a camera in `scanCode` mode, which sees the code `wx.scanCode` reads. */
+  const cameraScan = () => {
+    const { scanType, result, charSet, rawData } = scannedCode(ctx);
+    return { type: scanType, result, charSet, rawData };
+  };
+  /** Going to the background stops each camera that shows its preview (`bindstop`); coming back starts it again. */
+  const stopCameras = (stopped: boolean) => {
+    if (camerasStopped === stopped) return;
+    camerasStopped = stopped;
+    for (const { webviewId, cameraId, release } of cameras.values()) {
+      if (release) host.sendView(webviewId, { type: "cameraState", cameraId, stopped });
+    }
+  };
+  /** Each `<live-pusher>` on a page, with the release of the camera and microphone it holds. */
+  const pushers = new Map<string, { release?: () => void }>();
+  /**
+   * A `<live-pusher>` was inserted or removed. It needs the privacy agreement,
+   * `scope.camera` and `scope.record`; a refusal is its `error` 10001 or 10002.
+   */
+  const livePusherMounted = async (webviewId: number, pusherId: number, mounted: boolean) => {
+    const key = `${webviewId}:${pusherId}`;
+    pushers.get(key)?.release?.();
+    pushers.delete(key);
+    if (!mounted) return;
+    const entry: { release?: () => void } = {};
+    pushers.set(key, entry);
+    let errCode: number | undefined;
+    let errMsg: string | undefined;
+    try {
+      await requirePrivacy("live-pusher");
+      if (!(await requestScope("scope.camera"))) errCode = 10001;
+      else if (!(await requestScope("scope.record"))) errCode = 10002;
+    } catch (reason) {
+      errCode = 10001;
+      errMsg = `insertLivePusher:fail ${(reason as Error).message}`;
+    }
+    if (pushers.get(key) !== entry) return;
+    if (errCode === undefined) {
+      const camera = holdPermission("camera");
+      const record = holdPermission("record");
+      entry.release = () => {
+        camera();
+        record();
+      };
+    }
+    host.sendView(webviewId, {
+      type: "livePusherState",
+      pusherId,
+      ...(errCode !== undefined && {
+        errCode,
+        errMsg:
+          errMsg ?? `insertLivePusher:fail ${errCode === 10001 ? "camera" : "record"} auth deny`,
+      }),
+    });
+  };
+  /**
+   * Whether `<official-account>` may show: only after a launch from a scanned
+   * code (or the trial version's entry), and while the app came back from a
+   * scene that keeps that state, as WeChat documents since base library 2.18.1.
+   */
+  const officialAccountState = () => {
+    const config = host.manifest.config.officialAccount ?? {};
+    const launchScene = Number(host.launchOptions.scene);
+    const enterScene = Number(host.enterOptions().scene);
+    const status =
+      !OFFICIAL_ACCOUNT_LAUNCH_SCENES.has(launchScene) ||
+      !(
+        OFFICIAL_ACCOUNT_LAUNCH_SCENES.has(enterScene) ||
+        OFFICIAL_ACCOUNT_RETURN_SCENES.has(enterScene)
+      )
+        ? 5
+        : (config.status ?? 0);
+    return {
+      status,
+      errMsg: OFFICIAL_ACCOUNT_ERRORS[status] ?? "ok",
+      name: config.name ?? `${host.manifest.appName}公众号`,
+    };
   };
   /** A page is gone with everything it was using. */
   const releasePage = (webviewId: number) => {
-    for (const [key, release] of cameras) {
+    appApis.hooks.releasePage(webviewId);
+    for (const [key, { release }] of cameras) {
       if (!key.startsWith(`${webviewId}:`)) continue;
       release?.();
       cameras.delete(key);
     }
+    for (const [key, { release }] of pushers) {
+      if (!key.startsWith(`${webviewId}:`)) continue;
+      release?.();
+      pushers.delete(key);
+    }
+    voipApis.releasePage(webviewId);
+    observerApis.releasePage(webviewId);
+    animationApis.releasePage(webviewId);
+    canvasApis.releasePage(webviewId);
   };
 
   const setStorage = (key: string, data: unknown) => {
@@ -550,11 +694,18 @@ export function createWx(host: WxHost) {
     return webviewId;
   };
 
+  const darkmode = host.manifest.appJson.darkmode === true;
   /** System info with the window of the current page: a tab bar or a custom navigation bar changes its height. */
   const systemInfo = (): SystemInfo => {
     const { top, bottom } = host.windowInsets();
     const screenHeight = Number(host.system.screenHeight);
-    return { ...host.system, windowHeight: screenHeight - top - bottom, screenTop: top };
+    return {
+      ...host.system,
+      windowHeight: screenHeight - top - bottom,
+      screenTop: top,
+      // Only a Mini Program that supports DarkMode learns the theme
+      theme: darkmode ? host.theme() : undefined,
+    };
   };
   const windowInfo = () => {
     const s = systemInfo();
@@ -586,15 +737,26 @@ export function createWx(host: WxHost) {
     scrollOffset(callback?: AnyFunction) {
       return this.fields({ id: true, dataset: true, scrollOffset: true }, callback);
     }
+    node(callback?: AnyFunction) {
+      return this.fields({ node: true }, callback);
+    }
+    /** `{ context }`: the node's EditorContext, VideoContext, MapContext and so on; undefined for other nodes. */
+    context(callback?: AnyFunction) {
+      return this.fields({ context: true }, callback);
+    }
   }
 
   class SelectorQuery {
     private scope: { webviewId?: number; nodeId: number } = { nodeId: 0 };
     private readonly requests: SelectorQueryRequest[] = [];
     private readonly callbacks: (AnyFunction | undefined)[] = [];
+    private component?: object;
     in(component: object) {
       const scope = host.scopeOf(component);
-      if (scope) this.scope = scope;
+      if (scope) {
+        this.scope = scope;
+        this.component = component;
+      }
       return this;
     }
     select(selector: string) {
@@ -614,7 +776,32 @@ export function createWx(host: WxHost) {
     exec(callback?: AnyFunction) {
       const webviewId = this.scope.webviewId ?? host.topWebviewId();
       if (webviewId === undefined) return;
-      void host.query(webviewId, this.requests).then((results) => {
+      void host.query(webviewId, this.requests).then((raw) => {
+        // A canvas node is a Canvas object of the logic layer
+        // and a context is built from what the view says the node is
+        const withNode = (result: unknown) => {
+          const node = (result as { node?: Record<string, unknown> } | null)?.node;
+          const resolved = !node
+            ? result
+            : {
+                ...result!,
+                node:
+                  "scrollView" in node
+                    ? contextApis.scrollViewContext(webviewId, node as unknown as ScrollViewNode)
+                    : canvasApis.nodeOf(webviewId, node as never),
+              };
+          if (!resolved || typeof resolved !== "object" || !("context" in resolved))
+            return resolved;
+          const context = contextApis.contextOf(
+            webviewId,
+            resolved.context as ContextNode | null,
+            this.component,
+          );
+          return { ...resolved, context };
+        };
+        const results = raw.map((result) =>
+          Array.isArray(result) ? result.map(withNode) : withNode(result),
+        );
         results.forEach((result, index) => safeCall(this.callbacks[index], result));
         safeCall(callback, results);
       });
@@ -644,7 +831,7 @@ export function createWx(host: WxHost) {
     }),
     getUserProfile: (options: Options = {}) => {
       // The tap state is read when the call is made
-      const tapped = tapGesture;
+      const tapped = hasTapGesture();
       return asyncApi("getUserProfile", async () => {
         if (typeof options.desc !== "string" || options.desc.length === 0) {
           throw new Error("desc length does not meet the requirements");
@@ -659,10 +846,10 @@ export function createWx(host: WxHost) {
       passesTapGesture: true,
     }),
     openSetting: (options: Options = {}) => {
-      const tapped = tapGesture;
+      const tapped = hasTapGesture();
       return asyncApi("openSetting", async () => {
         if (!tapped) requireTapGesture();
-        return { authSetting: { ...authSetting } };
+        return openSettingPage();
       })(options);
     },
     authorize: asyncApi("authorize", async (options) => {
@@ -780,48 +967,24 @@ export function createWx(host: WxHost) {
       SDKVersion: host.system.SDKVersion,
       version: host.system.version,
       language: host.system.language,
-      theme: "light",
+      theme: darkmode ? host.theme() : undefined,
       enableDebug: false,
     }),
     getMenuButtonBoundingClientRect: () => ({ ...host.menuButton }),
     getLaunchOptionsSync: () => toJsonValue(host.launchOptions),
-    getEnterOptionsSync: () => toJsonValue(host.launchOptions),
+    getEnterOptionsSync: () => toJsonValue(host.enterOptions()),
     getNetworkType: asyncApi("getNetworkType", async () => ({
       networkType: "wifi",
       signalStrength: 4,
       hasSystemProxy: false,
     })),
     nextTick: (fn: AnyFunction) => setTimeout(fn, 0),
-    vibrateShort: asyncApi("vibrateShort", async () => ({})),
-    vibrateLong: asyncApi("vibrateLong", async () => ({})),
-
-    // Network
-    request: (options: Options) => {
-      const controller = new AbortController();
-      // Callbacks keep the tap state of the call
-      const tapped = tapGesture;
-      void performRequest(options, controller.signal).then(
-        (result) => respond([options.success, options.complete], result, tapped),
-        (error: unknown) =>
-          respond(
-            [options.fail, options.complete],
-            { errMsg: `request:fail ${(error as Error).message ?? error}`, errno: 600001 },
-            tapped,
-          ),
-      );
-      return {
-        abort: () => controller.abort(),
-        onHeadersReceived() {},
-        offHeadersReceived() {},
-        onChunkReceived() {},
-        offChunkReceived() {},
-      };
-    },
 
     // Routing
     navigateTo: asyncApi("navigateTo", async (options) => {
-      host.navigate("navigateTo", { url: options.url });
-      return { eventChannel: wxEventChannel() };
+      return {
+        eventChannel: host.navigate("navigateTo", { url: options.url, events: options.events }),
+      };
     }),
     redirectTo: asyncApi("redirectTo", async (options) => {
       host.navigate("redirectTo", { url: options.url });
@@ -887,12 +1050,9 @@ export function createWx(host: WxHost) {
         webviewId: currentWebview(),
         frontColor: options.frontColor,
         backgroundColor: options.backgroundColor,
+        animation: options.animation,
       }),
     ),
-    showNavigationBarLoading: asyncApi("showNavigationBarLoading", async () => ({})),
-    hideNavigationBarLoading: asyncApi("hideNavigationBarLoading", async () => ({})),
-    hideHomeButton: asyncApi("hideHomeButton", async () => ({})),
-    stopPullDownRefresh: asyncApi("stopPullDownRefresh", async () => ({})),
     pageScrollTo: asyncApi("pageScrollTo", async (options) => {
       host.sendView(currentWebview(), {
         type: "pageScrollTo",
@@ -904,71 +1064,44 @@ export function createWx(host: WxHost) {
     createSelectorQuery: () => new SelectorQuery(),
   };
 
-  async function performRequest(options: Options, signal: AbortSignal) {
-    const url = String(options.url ?? "");
-    if (!/^https?:\/\//.test(url)) throw new Error("invalid url");
-    const method = String(options.method ?? "GET").toUpperCase();
-    const header: Record<string, string> = { ...options.header };
-    const contentTypeKey = Object.keys(header).find((key) => key.toLowerCase() === "content-type");
-    if (!contentTypeKey) header["content-type"] = "application/json";
-    const contentType = header[contentTypeKey ?? "content-type"]!;
-    let target = url;
-    let body: string | undefined;
-    const data = options.data;
-    if (method === "GET" || method === "HEAD") {
-      const query =
-        typeof data === "string"
-          ? data
-          : data && typeof data === "object"
-            ? Object.entries(data as Record<string, unknown>)
-                .map(
-                  ([key, value]) =>
-                    `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`,
-                )
-                .join("&")
-            : "";
-      if (query) target += (target.includes("?") ? "&" : "?") + query;
-    } else if (data !== undefined) {
-      body =
-        typeof data === "string"
-          ? data
-          : contentType.includes("x-www-form-urlencoded")
-            ? new URLSearchParams(data as Record<string, string>).toString()
-            : JSON.stringify(data);
-    }
-    const response = await fetch(REQUEST_PROXY_PATH, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: target, method, header, body }),
-      signal,
-    });
-    const result = (await response.json()) as {
-      statusCode?: number;
-      header?: Record<string, string>;
-      body?: string;
-      error?: string;
-    };
-    if (result.error) throw new Error(result.error);
-    let responseData: unknown = result.body ?? "";
-    if ((options.dataType ?? "json") === "json" && typeof responseData === "string") {
-      try {
-        responseData = JSON.parse(responseData);
-      } catch {
-        // WeChat returns the text as is when it is not JSON
+  const ctx: ApiContext = {
+    host,
+    wx,
+    files,
+    requirePrivacy,
+    requestScope,
+    holdPermission,
+    cameraState: (webviewId) => {
+      for (const [key, { release, error, frameSize }] of cameras) {
+        if (key.startsWith(`${webviewId}:`)) {
+          return { ready: release !== undefined && !camerasStopped, error, frameSize };
+        }
       }
-    }
-    return {
-      data: responseData,
-      statusCode: result.statusCode,
-      header: result.header ?? {},
-      cookies: [],
-      errMsg: "request:ok",
-    };
-  }
-
-  function wxEventChannel() {
-    return { on() {}, once() {}, off() {}, emit() {} };
-  }
+      return undefined;
+    },
+  };
+  const canvasApis = createCanvasApis(ctx);
+  const animationApis = createAnimationApis(ctx);
+  const appApis = createAppApis(ctx);
+  const observerApis = createObserverApis(ctx);
+  const contextApis = createContextApis(ctx);
+  const voipApis = createVoipApis(ctx, user.openid);
+  const deviceApis = createDeviceApis(ctx);
+  Object.assign(
+    wx,
+    appApis.apis,
+    createFileApis(ctx),
+    createNetworkApis(ctx),
+    createInterfaceApis(ctx),
+    canvasApis.apis,
+    deviceApis.apis,
+    createMediaApis(ctx),
+    contextApis.apis,
+    voipApis.apis,
+    animationApis.apis,
+    observerApis.apis,
+  );
+  const webViewApis = createWebViewApis(ctx);
 
   const proxy = new Proxy(wx, {
     get(target, name) {
@@ -985,5 +1118,26 @@ export function createWx(host: WxHost) {
     },
   });
 
-  return { wx: proxy, openTypeDetail, nicknameFocus, cameraMounted, releasePage };
+  return {
+    wx: proxy,
+    app: appApis.hooks,
+    openTypeDetail,
+    nicknameFocus,
+    cameraMounted,
+    stopCameras,
+    livePusherMounted,
+    voipRoomMounted: voipApis.voipRoomMounted,
+    interruptVoip: voipApis.interrupt,
+    copyToClipboard: deviceApis.copy,
+    officialAccountState,
+    observerMessage: (...args: Parameters<typeof observerApis.receive>) =>
+      observerApis.receive(...args),
+    releasePage,
+    /** `this.animate()` and `this.clearAnimation()` of a page or component. */
+    animate: animationApis.animate,
+    clearAnimation: animationApis.clearAnimation,
+    animationDone: animationApis.animationDone,
+    /** Answers the JSSDK of a `<web-view>` page, other than `invokeMiniProgramAPI`. */
+    webViewInvoke: webViewApis.invoke,
+  };
 }

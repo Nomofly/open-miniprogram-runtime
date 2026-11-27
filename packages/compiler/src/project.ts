@@ -64,13 +64,22 @@ export async function loadProject(dir: string): Promise<MiniProgramProject> {
     appid: typeof projectConfig?.appid === "string" ? projectConfig.appid : "touristappid",
     name:
       typeof projectConfig?.projectname === "string"
-        ? decodeURIComponent(projectConfig.projectname)
+        ? decodeName(projectConfig.projectname)
         : path.basename(path.resolve(dir)),
     root,
     appJson,
     pages,
     entryPage: appJson.entryPagePath ?? appJson.pages[0]!,
   };
+}
+
+/** WeChat DevTools may store `projectname` URL-encoded; a name that is not valid encoding, such as `100%demo`, is kept as is. */
+function decodeName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
 }
 
 export async function readJson(file: string): Promise<Record<string, unknown> | undefined> {

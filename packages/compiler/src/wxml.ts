@@ -41,6 +41,26 @@ export const BUILTIN_TAGS = new Set([
   "official-account",
   "editor",
   "audio",
+  "page-container",
+  "root-portal",
+  "match-media",
+  "page-meta",
+  "functional-page-navigator",
+  "open-data",
+  "voip-room",
+  "channel-live",
+  "channel-video",
+  "ad-custom",
+  "official-account-publish",
+  "store-coupon",
+  "store-gift",
+  "store-home",
+  "store-product",
+  "reward",
+  "keyboard-accessory",
+  "share-element",
+  "selection",
+  "editor-portal",
 ]);
 
 /** A WXML expression, the text between `{{` and `}}`. */
@@ -164,7 +184,7 @@ export function parseWxml(source: string, file = "<wxml>"): RawNode[] {
   };
   /** Returns the index just after the `}}` that closes the `{{` at `start`. */
   const skipMustache = (start: number): number => {
-    const end = source.indexOf("}}", start + 2);
+    const end = mustacheEnd(source, start + 2);
     return end === -1 ? source.length : end + 2;
   };
 
@@ -173,6 +193,12 @@ export function parseWxml(source: string, file = "<wxml>"): RawNode[] {
     if (source.startsWith("<!--", i)) {
       const end = source.indexOf("-->", i + 4);
       i = end === -1 ? source.length : end + 3;
+      continue;
+    }
+    // Declarations such as `<!DOCTYPE html>` and processing instructions such as `<?xml ?>` are ignored
+    if (source.startsWith("<!", i) || source.startsWith("<?", i)) {
+      const end = source.indexOf(">", i + 2);
+      i = end === -1 ? source.length : end + 1;
       continue;
     }
     if (source.startsWith("</", i)) {
@@ -237,7 +263,12 @@ export function parseWxml(source: string, file = "<wxml>"): RawNode[] {
         if (end === -1) fail("unterminated <wxs>");
         el.children.push(source.slice(i, end));
         i = end + "</wxs>".length;
-      } else if (!selfClosing && !VOID_TAGS.has(tag)) {
+      } else if (
+        !selfClosing &&
+        (!VOID_TAGS.has(tag) ||
+          // An <input> holds its <keyboard-accessory> until </input>
+          (tag === "input" && /^\s*<keyboard-accessory[\s/>]/.test(source.slice(i))))
+      ) {
         stack.push(el);
       }
       continue;
@@ -245,7 +276,7 @@ export function parseWxml(source: string, file = "<wxml>"): RawNode[] {
     const start = i;
     while (i < source.length) {
       if (source.startsWith("{{", i)) i = skipMustache(i);
-      else if (source[i] === "<" && /[A-Za-z!/]/.test(source[i + 1] ?? "")) break;
+      else if (i > start && source[i] === "<" && /[A-Za-z!?/]/.test(source[i + 1] ?? "")) break;
       else i++;
     }
     parent.children.push(source.slice(start, i));
@@ -264,7 +295,7 @@ export function parseValue(raw: string): Value {
       parts.push(raw.slice(i));
       break;
     }
-    const end = raw.indexOf("}}", start + 2);
+    const end = mustacheEnd(raw, start + 2);
     if (end === -1) {
       parts.push(raw.slice(i));
       break;
@@ -276,6 +307,35 @@ export function parseValue(raw: string): Value {
   return parts;
 }
 
+/**
+ * Returns the index of the `}}` that ends an expression starting at `start`, or -1.
+ * A `}}` inside a string literal does not end it, unless the literal is unterminated.
+ */
+function mustacheEnd(source: string, start: number): number {
+  let quote: string | undefined;
+  for (let i = start; i < source.length; i++) {
+    const char = source[i];
+    if (quote) {
+      if (char === "\\") i++;
+      else if (char === quote) quote = undefined;
+    } else if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+    } else if (char === "}" && source[i + 1] === "}") {
+      return i;
+    }
+  }
+  return quote ? source.indexOf("}}", start) : -1;
+}
+
+/** Parses an attribute value. Whitespace around a lone interpolation is ignored, so `" {{ 1 }} "` is the number 1. */
+function parseAttribute(raw: string): Value {
+  const value = parseValue(raw);
+  if (typeof value === "string") return value;
+  const exprs = value.filter((part) => typeof part !== "string");
+  const padding = value.every((part) => typeof part !== "string" || part.trim() === "");
+  return exprs.length === 1 && padding ? exprs : value;
+}
+
 const EVENT_ATTR = /^(capture-bind|capture-catch|mut-bind|bind|catch):?(.+)$/;
 
 /** Compiles one WXML file. `file` is its Mini Program root-relative path. */
@@ -283,7 +343,8 @@ export function compileWxml(source: string, file: string): WxmlFile {
   const result: WxmlFile = {
     path: file,
     nodes: [],
-    templates: {},
+    // No prototype, so a template may be named `__proto__` or `constructor`
+    templates: Object.create(null) as Record<string, TemplateNode[]>,
     imports: [],
     includes: [],
     wxs: [],
@@ -339,7 +400,7 @@ export function compileWxml(source: string, file: string): WxmlFile {
         node = {
           type: "for",
           uid: uid++,
-          list: parseValue(forValue),
+          list: parseAttribute(forValue),
           item: attrs.get("wx:for-item") ?? "item",
           index: attrs.get("wx:for-index") ?? "index",
           key: attrs.get("wx:key"),
@@ -354,7 +415,7 @@ export function compileWxml(source: string, file: string): WxmlFile {
         chain = wrapIf(attrs.get("wx:if")!, node);
         out.push(chain);
       } else if (attrs.has("wx:elif") && chain) {
-        chain.branches.push({ test: parseValue(attrs.get("wx:elif")!), node });
+        chain.branches.push({ test: parseAttribute(attrs.get("wx:elif")!), node });
       } else if (attrs.has("wx:else") && chain) {
         chain.branches.push({ node });
         chain = undefined;
@@ -369,7 +430,7 @@ export function compileWxml(source: string, file: string): WxmlFile {
   const wrapIf = (test: string, node: TemplateNode): IfNode => ({
     type: "if",
     uid: uid++,
-    branches: [{ test: parseValue(test), node }],
+    branches: [{ test: parseAttribute(test), node }],
   });
 
   const compileElement = (
@@ -388,8 +449,8 @@ export function compileWxml(source: string, file: string): WxmlFile {
       return {
         type: "template",
         uid: uid++,
-        is: parseValue(attrs.get("is") ?? ""),
-        data: data === undefined ? undefined : parseValue(objectShorthand(data)),
+        is: parseAttribute(attrs.get("is") ?? ""),
+        data: data === undefined ? undefined : parseAttribute(objectShorthand(data)),
       };
     }
     const element: ElementNode = {
@@ -407,12 +468,12 @@ export function compileWxml(source: string, file: string): WxmlFile {
         const kind = event[1]!;
         element.events.push({
           name: event[2]!,
-          handler: parseValue(value),
+          handler: parseAttribute(value),
           catch: kind.endsWith("catch"),
           capture: kind.startsWith("capture"),
         });
       } else {
-        element.attrs[name] = parseValue(value);
+        element.attrs[name] = parseAttribute(value);
       }
     }
     return element;

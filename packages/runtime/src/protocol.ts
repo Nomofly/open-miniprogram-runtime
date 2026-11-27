@@ -3,6 +3,7 @@
  * page) and the simulator shell that hosts both and relays between them.
  */
 import type { AuthConfig } from "./auth.ts";
+import type { Theme, ThemeVariables } from "./theme.ts";
 
 /** omr.config.json: how the simulator stands in for WeChat. */
 export interface SimulatorConfig {
@@ -10,8 +11,51 @@ export interface SimulatorConfig {
   auth?: AuthConfig;
   /** Initial `wx.getStorageSync` contents, such as a login token that skips the login flow. */
   storage?: Record<string, unknown>;
-  /** What `wx.getLocation` returns. */
-  location?: { latitude: number; longitude: number };
+  /** What `wx.getLocation` returns; `wx.chooseLocation` also returns the name and address. */
+  location?: { latitude: number; longitude: number; name?: string; address?: string };
+  /** What `wx.scanCode` reads; the scan sheet is shown unless `auth.consent` answers it. */
+  scanCode?: { result?: string; scanType?: string; charSet?: string; path?: string };
+  /**
+   * How payment sheets (`wx.requestPayment`, `wx.requestCommonPayment`,
+   * `wx.requestVirtualPayment`) are answered: `success` or `cancel` without the
+   * sheet; otherwise as `auth.consent` says. `amount` in fen is shown for
+   * `wx.requestPayment`, whose parameters do not carry it.
+   */
+  payment?: { result?: "success" | "cancel"; amount?: number };
+  /** `wx.requestSubscribeMessage` answers by template id; templates not listed are asked for. */
+  subscribeMessage?: Record<string, "accept" | "reject" | "ban" | "filter">;
+  /** What `wx.chooseAddress` returns, over a default address in Beijing. */
+  address?: Record<string, string>;
+  /** What `wx.chooseInvoiceTitle` returns, over a default company title. */
+  invoiceTitle?: Record<string, string>;
+  /** `wx.getExtConfig` and `wx.getExtConfigSync`: the `ext` of a third-party platform's ext.json. */
+  extConfig?: Record<string, unknown>;
+  media?: {
+    /** Project paths of the images `wx.chooseImage` and `wx.chooseMedia` pick from the album; generated images otherwise. */
+    images?: string[];
+    /** The duration in seconds of every audio source; default 10. */
+    audioDuration?: number;
+  };
+  /** How `<ad>` and `<ad-custom>` load. */
+  ad?: AdConfig;
+  /**
+   * The Official Account `<official-account>` shows, for the launch scenes WeChat
+   * allows (1011, 1017, 1025, 1047 and 1124); `status` (one of its 1 to 4) makes
+   * it fail to load even then.
+   */
+  officialAccount?: { name?: string; status?: number };
+  /** The openids already in every room `wx.joinVoIPChat` joins; default one simulated member. */
+  voip?: { members?: string[] };
+}
+
+export interface AdConfig {
+  /**
+   * `fill` (default) shows a mock ad and fires `bindload`; `error` takes no
+   * height and fires `binderror` with `errCode`.
+   */
+  result?: "fill" | "error";
+  /** The `errCode` of `binderror`, one of WeChat's ad error codes 1000 to 1008; default 1004, no suitable ad. */
+  errCode?: number;
 }
 
 export interface Manifest {
@@ -23,6 +67,8 @@ export interface Manifest {
   entryPage: string;
   /** Window configuration of each page, from app.json and the page's json. */
   windows: Record<string, Record<string, unknown>>;
+  /** theme.json at app.json `themeLocation`, read when app.json sets `"darkmode": true`. */
+  themeVariables?: ThemeVariables;
   config: SimulatorConfig;
 }
 
@@ -58,6 +104,8 @@ export interface WxEvent {
   touches?: unknown[];
   changedTouches?: unknown[];
   mark?: Record<string, unknown>;
+  /** `<map>`'s `regionchange`: what moved the map; its `type` is then `begin` or `end`. */
+  causedBy?: string;
 }
 
 /** Event handlers a component's host binds in its owner's template, by event name. */
@@ -67,10 +115,51 @@ export interface ComponentViewOptions {
   externalClasses: string[];
   /** `isolated`, `apply-shared` or `shared`. */
   styleIsolation: string;
+  /** `options.virtualHost`: the host takes no box, so its children lay out in its parent. */
+  virtualHost?: boolean;
+  /** Has `wx://form-field`: a form submits its `value` data under its `name`. */
+  formField?: boolean;
+  /** Has `wx://form-field-group`: a form outside the component collects the controls inside it. */
+  formFieldGroup?: boolean;
+  /** Has `wx://form-field-button`: a `form-type` button inside the component reaches a form outside it. */
+  formFieldButton?: boolean;
+}
+
+/** An event binding in a template, as `triggerEvent` finds it on the way up. */
+export interface EventBinding {
+  name: string;
+  handler: string;
+  catch: boolean;
+  capture: boolean;
+}
+
+/** An element above a component host that binds events, nearest first. */
+export interface AncestorBindings {
+  /** The page (0) or component whose template has the element. */
+  ownerId: number;
+  id: string;
+  dataset: Record<string, unknown>;
+  events: EventBinding[];
+}
+
+/** Where a component sits in the page, which relations, selectors and bubbling events use. */
+export interface TreeNode {
+  nodeId: number;
+  /** The nearest component host above it in the rendered page, through slots; 0 for the page. */
+  parentId: number;
+  /** The tag its owner wrote, such as `van-button`. */
+  tag: string;
+  /** The `class` its owner wrote, before scoping. */
+  className: string;
+  /** Its host's bindings, capture ones included. */
+  events: EventBinding[];
+  ancestors: AncestorBindings[];
 }
 
 export type ViewToLogic =
   | { type: "ready" }
+  /** Whether a `<page-container>` is open on the page; a return closes it instead of the page. */
+  | { type: "pageContainer"; open: boolean }
   | { type: "rendered"; seq: number }
   | {
       type: "event";
@@ -83,11 +172,23 @@ export type ViewToLogic =
        * one part of a combined open-type such as `getPhoneNumber|agreePrivacyAuthorization`.
        */
       openType?: string;
+      /** The button attributes the open-type reads, such as `send-message-path` for `contact`. */
+      openTypeProps?: Record<string, unknown>;
+      /**
+       * Set for the `input` event of `<input>` and `<textarea>`: a string or
+       * number the handler returns replaces the field's value, which the logic
+       * layer answers with `eventResult`.
+       */
+      replyId?: number;
     }
   /** An `<input type="nickname">` gained or lost focus. */
   | { type: "nickname"; focused: boolean }
-  /** A `<camera>` was inserted into or removed from the page. */
-  | { type: "camera"; cameraId: number; mounted: boolean }
+  /** A `<camera>` was inserted into or removed from the page, with its `mode` and `frame-size`, which only count then. */
+  | { type: "camera"; cameraId: number; mounted: boolean; mode?: string; frameSize?: string }
+  /** A `<live-pusher>` was inserted into or removed from the page; it needs the camera and the microphone. */
+  | { type: "livePusher"; pusherId: number; mounted: boolean }
+  /** A `<voip-room>` was inserted, changed its `openid` or `mode`, or was removed. */
+  | { type: "voipRoom"; roomId: number; mounted: boolean; openid?: string; mode?: string }
   | {
       type: "attach";
       nodeId: number;
@@ -104,12 +205,64 @@ export type ViewToLogic =
       nodeId: number;
       props: Record<string, unknown>;
       listeners: ComponentListeners;
+      /** The host's current id and dataset, which `selectComponent` and `triggerEvent` use. */
+      id: string;
+      dataset: Record<string, unknown>;
     }
   | { type: "detach"; nodeIds: number[] }
+  /** Every component of the page in document order, sent after a render that changed any of them. */
+  | { type: "tree"; nodes: TreeNode[] }
   | { type: "navigate"; openType: string; url?: string; delta?: number }
   | { type: "scroll"; scrollTop: number }
+  /** The page's window changed size. */
+  | { type: "resize"; size: { windowWidth: number; windowHeight: number } }
   | { type: "reachBottom" }
-  | { type: "queryResult"; queryId: number; results: unknown[] };
+  /** The attributes of the page's `<navigation-bar>` changed. */
+  | { type: "navigationBar"; attributes: Record<string, unknown> }
+  /** A `<video>` of the page entered full screen, or the last one left it. */
+  | { type: "videoFullScreen"; fullScreen: boolean }
+  /** The simulated keyboard rose (`height`) or went down (0); `offset` is how far the page moves up for `adjust-position`. */
+  | { type: "keyboard"; height: number; offset: number }
+  /** A long press on an `<image show-menu-by-longpress>`. */
+  | { type: "imageMenu" }
+  /** An `<official-account>` was inserted and asks whether it may show. */
+  | { type: "officialAccount"; accountId: number }
+  /**
+   * A tap on a `<navigator target="miniProgram">`: its `open-type` and attributes,
+   * and the handlers of its `success`, `fail` and `complete`.
+   */
+  | {
+      type: "navigateMiniProgram";
+      openType: string;
+      props: Record<string, unknown>;
+      target: WxEventTarget;
+      handlers: Partial<
+        Record<"success" | "fail" | "complete", { ownerId: number; handler: string }>
+      >;
+    }
+  /**
+   * The page's `<web-view>`: its `src` and the handlers bound to its events,
+   * sent when either changes; without `src`, the page has none any more.
+   */
+  | {
+      type: "webView";
+      src?: string;
+      target?: WxEventTarget;
+      handlers?: Partial<Record<WebViewEventName, { ownerId: number; handler: string }>>;
+    }
+  /** The user pulled the page down far enough, or `wx.startPullDownRefresh` started it. */
+  | { type: "pullDownRefresh" }
+  /** An observed node's intersection ratio crossed a threshold. */
+  | { type: "intersection"; observerId: number; result: IntersectionResult }
+  /** A media query's match state at first, then each time it changes. */
+  | { type: "mediaQuery"; observerId: number; matches: boolean }
+  | { type: "queryResult"; queryId: number; results: unknown[] }
+  /** The answer to `callBuiltin`: what the method returned, or why it failed. */
+  | { type: "builtinResult"; callId: number; result?: Record<string, unknown>; error?: string }
+  /** An `animate` finished, or a `clearAnimation` is done. */
+  | { type: "animationDone"; animationId: number }
+  /** The answer to a `viewRequest`; `error` is the fail reason. */
+  | { type: "viewReply"; requestId: number; result?: Record<string, unknown>; error?: string };
 
 export type LogicToView =
   | { type: "init"; data: Record<string, unknown>; seq: number }
@@ -124,9 +277,109 @@ export type LogicToView =
   | { type: "pageScrollTo"; scrollTop: number; duration: number }
   /** The user chose their WeChat nickname above the keyboard of the focused nickname input. */
   | { type: "fillNickname"; value: string }
-  /** Whether a `<camera>` may show its preview; `error` is the `binderror` message when not. */
-  | { type: "cameraState"; cameraId: number; error?: string }
-  | { type: "query"; queryId: number; requests: SelectorQueryRequest[] };
+  /**
+   * Whether a `<camera>` may show its preview; `error` is the `binderror` message when not.
+   * `scan` is the `scancode` detail of a camera in `scanCode` mode. `stopped` is true when the
+   * app went to the background, which stops the camera, and false when it came back.
+   */
+  | {
+      type: "cameraState";
+      cameraId: number;
+      error?: string;
+      scan?: Record<string, unknown>;
+      stopped?: boolean;
+    }
+  /** Whether a `<live-pusher>` may use the camera and the microphone; `errCode` 10001 or 10002 names the refusal. */
+  | { type: "livePusherState"; pusherId: number; errCode?: number; errMsg?: string }
+  /**
+   * What a `<voip-room>` shows: its member's video when `visible`, with the user's microphone `muted`,
+   * or `error` while it cannot; `fire` when the error is new and fires `binderror`.
+   */
+  | {
+      type: "voipRoomState";
+      roomId: number;
+      visible?: boolean;
+      muted?: boolean;
+      error?: string;
+      fire?: boolean;
+    }
+  /** Whether an `<official-account>` shows (`status` 0) or fails, with the `load` or `error` detail and the account's name. */
+  | {
+      type: "officialAccountState";
+      accountId: number;
+      status: number;
+      errMsg: string;
+      name: string;
+    }
+  /** `this.animate`: plays WeChat keyframes on the elements a selector finds in a page's or component's template. */
+  | {
+      type: "animate";
+      animationId: number;
+      scopeNodeId: number;
+      selector: string;
+      keyframes: Record<string, unknown>[];
+      duration: number;
+    }
+  /** `this.clearAnimation`: removes the named keyframe fields of earlier `animate` calls, or all of them. */
+  | {
+      type: "clearAnimation";
+      animationId: number;
+      scopeNodeId: number;
+      selector: string;
+      properties?: string[];
+    }
+  | { type: "query"; queryId: number; requests: SelectorQueryRequest[] }
+  /** Calls a method of a built-in component, such as `VideoContext.play` on a `<video>`; answered by `builtinResult`. */
+  | { type: "callBuiltin"; callId: number; target: BuiltinTarget; method: string; args: unknown[] }
+  /** `IntersectionObserver.observe`: the view reports threshold crossings as `intersection`. */
+  | { type: "observeIntersection"; request: IntersectionRequest }
+  /** `MediaQueryObserver.observe`: the view reports the match state as `mediaQuery`. */
+  | { type: "observeMediaQuery"; observerId: number; descriptor: MediaQueryDescriptor }
+  /** Stops an intersection or media query observation. */
+  | { type: "unobserve"; observerId: number }
+  /** A new picture of a `<canvas>`, drawn by the logic layer. */
+  | { type: "canvasFrame"; canvasNodeId: number; bitmap: ImageBitmap }
+  /** What an `input` handler returned; `value` replaces the field's value when set. */
+  | { type: "eventResult"; replyId: number; value?: string }
+  /** A return while a `<page-container>` is open: the view closes the container. */
+  | { type: "closePageContainer" }
+  /** The page went to the background (another page covers it, or the app left) or came back. */
+  /** `background` is set when the app went to or came back from the background, not another page. */
+  | { type: "pageVisibility"; visible: boolean; background?: boolean }
+  /** Starts or ends the pull-down refresh animation. */
+  | { type: "pullDownRefresh"; refreshing: boolean }
+  /** `wx.setBackgroundColor` and `wx.setBackgroundTextStyle`: the window behind the page. */
+  | { type: "background"; color?: string; top?: string; bottom?: string; textStyle?: string }
+  /** Work an app-level API needs done in the page, answered with `viewReply`. */
+  | { type: "viewRequest"; requestId: number; request: ViewRequest }
+  /** The user tapped the status bar (iOS) or double-tapped the title (Android): scroll views go back to the top. */
+  | { type: "backToTop" };
+
+/** What a `viewRequest` asks the view to do. */
+export type ViewRequest =
+  /** `wx.loadFontFace`: adds a font to the page; `source` is a `url(...)` or a plain URL. */
+  | { kind: "loadFontFace"; family: string; source: string; desc: Record<string, string> }
+  /** `wx.hideKeyboard`: blurs the focused input. */
+  | { kind: "hideKeyboard" }
+  /** `wx.getSelectedTextRange`: the focused input's selection, `{ start, end }`, or `{}`. */
+  | { kind: "selectedTextRange" };
+
+/** The built-in component a context such as `VideoContext` drives. */
+export interface BuiltinTarget {
+  /** The component's tag, such as `video`. */
+  tag: string;
+  /** Its id in the template of `scopeNodeId`; without one, the first such component anywhere in the page. */
+  id?: string;
+  /** The page (0) or component whose template has the component. */
+  scopeNodeId: number;
+  /** Set for a node a selector query found: that very element, whatever its id. */
+  nodeKey?: number;
+}
+
+/** What `NodesRef.node` gives for a `<scroll-view>`: the target of its ScrollViewContext and its current settings. */
+export interface ScrollViewNode {
+  scrollView: BuiltinTarget & { settings: Record<string, boolean> };
+}
 
 /** One `wx.createSelectorQuery()` selection and the fields to read from it. */
 export interface SelectorQueryRequest {
@@ -143,7 +396,72 @@ export interface SelectorQueryRequest {
     scrollOffset?: boolean;
     computedStyle?: string[];
     properties?: string[];
+    /** The node of a `<canvas type="2d">`: the view answers `{ canvasNodeId, width, height }`. */
+    node?: boolean;
+    /** The node's context, such as an `EditorContext`: the view answers what the node is, a `ContextNode`. */
+    context?: boolean;
   };
+}
+
+/** What the view tells the logic layer about a node, so it can build the node's context. */
+export interface ContextNode extends BuiltinTarget {
+  /** The `canvas-id` of a `<canvas>`. */
+  canvasId?: string;
+  /** The `type` of a `<canvas>`, such as `2d`; a legacy canvas has none. */
+  canvasType?: string;
+}
+
+/** How far each edge of a reference area moves outward; negative values shrink it. */
+export interface IntersectionMargins {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** One `IntersectionObserver.observe` call, with the reference areas set before it. */
+export interface IntersectionRequest {
+  observerId: number;
+  /** The page (0) or component whose template the selectors are scoped to. */
+  scopeNodeId: number;
+  selector: string;
+  /** `observeAll`: every node the selector matches rather than the first. */
+  all: boolean;
+  /** `relativeTo` nodes, or the viewport for a null selector; the reference area is their intersection. */
+  relatives: { selector: string | null; margins: IntersectionMargins }[];
+  thresholds: number[];
+  initialRatio: number;
+}
+
+export interface IntersectionRect {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+/** The callback argument of `IntersectionObserver.observe`. */
+export interface IntersectionResult {
+  id: string;
+  dataset: Record<string, unknown>;
+  time: number;
+  intersectionRatio: number;
+  intersectionRect: IntersectionRect;
+  boundingClientRect: IntersectionRect;
+  relativeRect: { left: number; right: number; top: number; bottom: number };
+}
+
+/** The descriptor of `MediaQueryObserver.observe`; lengths in px. */
+export interface MediaQueryDescriptor {
+  minWidth?: number;
+  maxWidth?: number;
+  width?: number;
+  minHeight?: number;
+  maxHeight?: number;
+  height?: number;
+  orientation?: "landscape" | "portrait";
 }
 
 export interface StackEntry {
@@ -165,11 +483,52 @@ export type ShellToLogic =
       storage?: Record<string, unknown>;
       /** The page to open first, instead of the app's entry page. */
       launch?: { path: string; query: Record<string, string> };
+      /** The launch scene, such as 1047 for a scanned Mini Program code; 1001 when absent. */
+      scene?: number;
+      /** The system theme; light when absent. */
+      theme?: Theme;
     }
   | { type: "view"; webviewId: number; message: ViewToLogic }
   | { type: "uiResult"; callId: number; result?: Record<string, unknown>; error?: string }
   | { type: "switchTab"; url: string }
-  | { type: "navigateBack" };
+  | { type: "navigateBack" }
+  /** The navigation bar's home button. */
+  | { type: "reLaunch"; url: string }
+  /** The capsule's menu button was tapped. */
+  | { type: "menu" }
+  /** The user left the Mini Program, such as with the capsule's close button. */
+  | { type: "appHide" }
+  /** The user came back to the Mini Program from `scene` (1001 when absent); the last page shows again. */
+  | { type: "appShow"; scene?: number }
+  /** The system theme changed. */
+  | { type: "theme"; theme: Theme }
+  /**
+   * A page's `<web-view>` finished loading a document (`load`, with `src`),
+   * could not load one (`error`, with `url` and `fullUrl`), or its page
+   * changed its URL without loading (`location`, with `src`).
+   */
+  | {
+      type: "webViewEvent";
+      webviewId: number;
+      name: "load" | "error" | "location";
+      detail: Record<string, unknown>;
+    }
+  /**
+   * The page in a `<web-view>` called `WeixinJSBridge.invoke`, as the JSSDK
+   * does; answered with `webViewResult`.
+   */
+  | {
+      type: "webViewInvoke";
+      webviewId: number;
+      /** The origin of the document that called, as the shell saw it; it scopes the images the page chose. */
+      origin: string;
+      callId: number;
+      name: string;
+      args: Record<string, unknown>;
+    };
+
+/** The events of `<web-view>`. */
+export type WebViewEventName = "load" | "error" | "message";
 
 export type LogicToShell =
   | {
@@ -184,7 +543,17 @@ export type LogicToShell =
   | { type: "ui"; callId: number; name: string; args: Record<string, unknown> }
   | { type: "storage"; storage: Record<string, unknown> }
   /** Capabilities the Mini Program is using now; the capsule shows their icons instead of its dots. */
-  | { type: "permissionsInUse"; kinds: PermissionKind[] };
+  | { type: "permissionsInUse"; kinds: PermissionKind[] }
+  /** A page's full-screen `<video>` covers the whole screen: the shell raises its WebView over the chrome, or puts it back. */
+  | { type: "videoFullScreen"; webviewId: number; fullScreen: boolean }
+  /** Shows the simulated keyboard over a page, `height` tall, or hides it (0), and moves the page's WebView up by `offset`. */
+  | { type: "keyboard"; webviewId: number; height: number; offset: number }
+  /** Opens `src` in a WebView over the page, or closes it without `src`. */
+  | { type: "webView"; webviewId: number; src?: string }
+  /** The Mini Program left for WeChat (`wx.exitMiniProgram`), as the capsule's close button does. */
+  | { type: "exit" }
+  /** The answer to `webViewInvoke`, in the JSSDK bridge's format, such as `{ err_msg: "chooseImage:ok", localIds }`. */
+  | { type: "webViewResult"; webviewId: number; callId: number; result: Record<string, unknown> };
 
 /** Capabilities whose use WeChat shows in the capsule. */
 export type PermissionKind = "camera" | "record" | "location";

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
 import { decodeCode, mockWechatApi, startLogic } from "../src/index.ts";
-import type { LogicToShell, SimulatorConfig, ViewToLogic } from "../src/index.ts";
+import type {
+  AncestorBindings,
+  LogicToShell,
+  SimulatorConfig,
+  TreeNode,
+  ViewToLogic,
+} from "../src/index.ts";
 
 const SYSTEM = {
   windowWidth: 375,
@@ -18,6 +24,8 @@ function boot(
   appJson: Record<string, unknown> & { pages: string[] },
   config: SimulatorConfig = {},
   windows: Record<string, Record<string, unknown>> = {},
+  launch?: { path: string; query: Record<string, string> },
+  scene?: number,
 ) {
   const sent: LogicToShell[] = [];
   const handle = startLogic((message) => sent.push(message));
@@ -42,6 +50,8 @@ function boot(
     menuButton: MENU_BUTTON,
     chrome: { navigationBar: 64, tabBar: 50 },
     appService,
+    launch,
+    scene,
   });
   const view = (webviewId: number, message: ViewToLogic) =>
     handle({ type: "view", webviewId, message });
@@ -61,6 +71,31 @@ const toView = (sent: LogicToShell[], type: string) =>
   );
 
 const APP = "App({ log: [] });";
+const bind = (name: string, handler: string, catchIt = false) => ({
+  name,
+  handler,
+  catch: catchIt,
+  capture: false,
+});
+/** Attaches components to page 1 as the view does: `[nodeId, ownerId, path, id, props?]`. */
+const attachAll = (
+  view: (webviewId: number, message: ViewToLogic) => void,
+  list: [number, number, string, string, Record<string, unknown>?][],
+) => {
+  for (const [nodeId, ownerId, path, id, props = {}] of list) {
+    view(1, { type: "attach", nodeId, ownerId, path, props, listeners: {}, id, dataset: {} });
+  }
+};
+const tree = (
+  nodeId: number,
+  parentId: number,
+  tag: string,
+  className = "",
+  events: ReturnType<typeof bind>[] = [],
+  ancestors: AncestorBindings[] = [],
+): TreeNode => ({ nodeId, parentId, tag, className, events, ancestors });
+const currentPage = () => (globalThis as any).getCurrentPages()[0];
+
 const tapOn = (id: string) => {
   const target = { id, dataset: {} };
   return { type: "tap", timeStamp: 0, target, currentTarget: target, detail: {} };
@@ -150,6 +185,105 @@ describe("logic layer", () => {
     await settle();
     await settle();
     expect(log()).toEqual(["checkSession:fail session time out, need relogin", "checkSession:ok"]);
+  });
+
+  test("what a bindinput handler returns is sent back to replace the input's value", () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          upper(e) { return e.detail.value.toUpperCase(); },
+          count(e) { return e.detail.value.length; },
+          keep() {},
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    const input = (handler: string, replyId: number) =>
+      view(1, {
+        type: "event",
+        ownerId: 0,
+        handler,
+        replyId,
+        event: {
+          type: "input",
+          timeStamp: 0,
+          target,
+          currentTarget: target,
+          detail: { value: "abc" },
+        },
+      });
+    input("upper", 1);
+    input("count", 2);
+    input("keep", 3);
+    expect(toView(sent, "eventResult")).toEqual([
+      { type: "eventResult", replyId: 1, value: "ABC" },
+      { type: "eventResult", replyId: 2, value: "3" },
+      // Returning nothing keeps what the user typed, but the view still hears back
+      { type: "eventResult", replyId: 3, value: undefined },
+    ]);
+  });
+
+  test("the chooseAvatar button gives the avatar as a temporary file that wx.uploadFile can read", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onAvatar(e) { getApp().log.push(e.detail.avatarUrl); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow", privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler: "onAvatar",
+      openType: "chooseAvatar",
+      event: { type: "chooseavatar", timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+    await settle();
+    const [avatarUrl] = log() as string[];
+    expect(avatarUrl).toMatch(/^http:\/\/tmp\/.+\.svg$/);
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    const content = wx.getFileSystemManager().readFileSync(avatarUrl, "utf8") as string;
+    expect(content).toContain("<svg");
+  });
+
+  test("a return closes an open page-container instead of the page, and a hidden page is told so its videos pause", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/a/a.js": "Page({});", "pages/b/b.js": "Page({});" },
+      { pages: ["pages/a/a", "pages/b/b"] },
+    );
+    view(1, { type: "ready" });
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    wx.navigateTo({ url: "/pages/b/b" });
+    await settle();
+    view(2, { type: "ready" });
+    const visibility = (webviewId: number) =>
+      sent.flatMap((message) =>
+        message.type === "toView" &&
+        message.webviewId === webviewId &&
+        message.message.type === "pageVisibility"
+          ? [message.message.visible]
+          : [],
+      );
+    expect(visibility(1)).toEqual([true, false]);
+
+    view(2, { type: "pageContainer", open: true });
+    handle({ type: "navigateBack" });
+    await settle();
+    await expect(wx.navigateBack()).resolves.toMatchObject({ errMsg: "navigateBack:ok" });
+    expect(toView(sent, "closePageContainer")).toHaveLength(2);
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual(["pages/a/a", "pages/b/b"]);
+
+    view(2, { type: "pageContainer", open: false });
+    handle({ type: "navigateBack" });
+    await settle();
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual(["pages/a/a"]);
+    expect(visibility(1)).toEqual([true, false, true]);
   });
 
   test("a phone number button asks for consent and gives a code for the configured number", async () => {
@@ -560,20 +694,898 @@ describe("logic layer", () => {
       options: { styleIsolation: "isolated" },
     });
 
-    view(1, { type: "props", nodeId: 1, props: { start: 5 }, listeners: {} });
+    view(1, {
+      type: "props",
+      nodeId: 1,
+      props: { start: 5 },
+      listeners: {},
+      id: "counter",
+      dataset: {},
+    });
     expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 1, patch: { doubled: 10 } });
 
+    // The host's id changed in the owner's template: selectComponent finds it by the new id only
     view(1, {
       type: "props",
       nodeId: 1,
       props: { start: 5 },
       listeners: { change: { handler: "onChange", catch: false } },
+      id: "renamed",
+      dataset: { kind: "main" },
     });
     const page = (globalThis as any).getCurrentPages()[0];
-    page.selectComponent("#counter").bump();
+    expect(page.selectComponent("#counter")).toBeNull();
+    page.selectComponent("#renamed").bump();
     expect(log()).toEqual([
       ["attached", 3, "Clicks"],
-      ["change", { value: 6 }, "counter"],
+      ["change", { value: 6 }, "renamed"],
     ]);
+  });
+
+  test("navigateTo connects the opener and the new page with an event channel", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/list/list.js": `Page({
+          async onLoad() {
+            const { eventChannel } = await wx.navigateTo({
+              url: "/pages/detail/detail",
+              events: { saved: (value) => getApp().log.push("opener got " + value) },
+            });
+            // Emitted before the new page has loaded: it waits for the listener
+            eventChannel.emit("item", { id: 7 });
+          },
+        });`,
+        "pages/detail/detail.js": `Page({
+          onLoad() {
+            const channel = this.getOpenerEventChannel();
+            channel.on("item", (item) => {
+              getApp().log.push("detail got " + item.id);
+              channel.emit("saved", item.id * 2);
+            });
+          },
+        });`,
+      },
+      { pages: ["pages/list/list", "pages/detail/detail"] },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    expect(log()).toEqual([]);
+    view(2, { type: "ready" });
+    expect(log()).toEqual(["detail got 7", "opener got 14"]);
+  });
+
+  test("a button event answered after its page was closed does not reach the page", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/a/a.js": `Page({ onPhone(e) { getApp().log.push("a " + e.detail.errMsg); } });`,
+        "pages/b/b.js": `Page({});`,
+      },
+      { pages: ["pages/a/a", "pages/b/b"] },
+      { auth: { privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler: "onPhone",
+      openType: "getPhoneNumber",
+      event: { type: "getphonenumber", timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+    await settle();
+    const ui = sent.find((message) => message.type === "ui") as Extract<
+      LogicToShell,
+      { type: "ui" }
+    >;
+    (globalThis as any).wx.redirectTo({ url: "/pages/b/b" });
+    await settle();
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(log()).toEqual([]);
+  });
+
+  test("pull-down refresh: the API starts the view's animation and the view's refresh reaches the page", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          onLoad() { wx.startPullDownRefresh(); },
+          onPullDownRefresh() { getApp().log.push("refresh"); wx.stopPullDownRefresh(); },
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    await settle();
+    // The page hears of the refresh only once the view starts it
+    expect(log()).toEqual([]);
+    view(1, { type: "pullDownRefresh" });
+    await settle();
+    expect(log()).toEqual(["refresh"]);
+    expect(toView(sent, "pullDownRefresh")).toEqual([
+      { type: "pullDownRefresh", refreshing: true },
+      { type: "pullDownRefresh", refreshing: false },
+    ]);
+  });
+
+  test("a page's <navigation-bar> sets the title, colors and loading of its own navigation bar", () => {
+    const { sent, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    view(1, {
+      type: "navigationBar",
+      attributes: {
+        title: "详情",
+        loading: true,
+        "front-color": "#ffffff",
+        "background-color": "#07c160",
+        "color-animation-duration": "300",
+        "color-animation-timing-func": "easeIn",
+      },
+    });
+    const uis = sent.flatMap((message) =>
+      message.type === "ui" ? [{ name: message.name, args: message.args }] : [],
+    );
+    expect(uis).toEqual([
+      { name: "setNavigationBarTitle", args: { webviewId: 1, title: "详情" } },
+      {
+        name: "setNavigationBarColor",
+        args: {
+          webviewId: 1,
+          frontColor: "#ffffff",
+          backgroundColor: "#07c160",
+          animation: { duration: 300, timingFunc: "easeIn" },
+        },
+      },
+      { name: "showNavigationBarLoading", args: { webviewId: 1 } },
+    ]);
+  });
+
+  test("a scanCode camera sees the configured code, and the background stops and restarts it", async () => {
+    const { sent, handle, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ frames() {
+          const listener = wx.createCameraContext().onCameraFrame((frame) => {
+            getApp().log.push([frame.width, frame.height]);
+            listener.stop();
+          });
+          listener.start();
+        } });`,
+      },
+      { pages: ["pages/index/index"] },
+      {
+        auth: { privacy: { agreed: true }, authSetting: { "scope.camera": true } },
+        scanCode: { result: "hello", scanType: "QR_CODE" },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "camera", cameraId: 1, mounted: true, mode: "scanCode", frameSize: "small" });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(toView(sent, "cameraState")).toEqual([
+      {
+        type: "cameraState",
+        cameraId: 1,
+        scan: { type: "QR_CODE", result: "hello", charSet: "utf-8", rawData: btoa("hello") },
+      },
+    ]);
+    currentPage().frames();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect((globalThis as any).getApp().log).toEqual([[144, 192]]);
+
+    handle({ type: "appHide" });
+    handle({ type: "appShow" });
+    expect(toView(sent, "cameraState").slice(1)).toEqual([
+      { type: "cameraState", cameraId: 1, stopped: true },
+      { type: "cameraState", cameraId: 1, stopped: false },
+    ]);
+  });
+
+  test("a page whose view gets ready while the app is in the background shows only when the app returns", () => {
+    const { handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          onLoad() { getApp().log.push("onLoad"); },
+          onShow() { getApp().log.push("onShow"); },
+        });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    handle({ type: "appHide" });
+    view(1, { type: "ready" });
+    expect(log()).toEqual(["onLoad"]);
+    handle({ type: "appShow" });
+    expect(log()).toEqual(["onLoad", "onShow"]);
+  });
+
+  test("a live-pusher needs the camera and the microphone, and the background reaches live components", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": false },
+        },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "livePusher", pusherId: 1, mounted: true });
+    for (let i = 0; i < 4; i++) await settle();
+    // Allowed the camera but refused the microphone: error 10002, and nothing in use
+    expect(toView(sent, "livePusherState")).toEqual([
+      {
+        type: "livePusherState",
+        pusherId: 1,
+        errCode: 10002,
+        errMsg: "insertLivePusher:fail record auth deny",
+      },
+    ]);
+    expect(sent.some((message) => message.type === "permissionsInUse")).toBe(false);
+
+    handle({ type: "appHide" });
+    handle({ type: "appShow" });
+    expect(toView(sent, "pageVisibility").slice(-2)).toEqual([
+      { type: "pageVisibility", visible: false, background: true },
+      { type: "pageVisibility", visible: true, background: true },
+    ]);
+  });
+
+  test("a live-pusher the user allows holds the camera and the microphone until it is removed", async () => {
+    const { sent, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": true },
+        },
+      },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "livePusher", pusherId: 2, mounted: true });
+    for (let i = 0; i < 4; i++) await settle();
+    view(1, { type: "livePusher", pusherId: 2, mounted: false });
+    await settle();
+    expect(toView(sent, "livePusherState")).toEqual([{ type: "livePusherState", pusherId: 2 }]);
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["camera"], ["camera", "record"], ["record"], []]);
+  });
+
+  test("joinVoIPChat joins a video room once, voip-room windows follow it, and the background interrupts it", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `
+          const push = (r) => getApp().log.push(r);
+          wx.onVoIPChatInterrupted(push);
+          wx.onVoIPVideoMembersChanged((r) => push(r.openIdList));
+          const room = { signature: "s", nonceStr: "n", timeStamp: 1, groupId: "g", roomType: "video" };
+          Page({
+            join() { wx.joinVoIPChat({ ...room, success: push, fail: push }); },
+            joinAgain() { wx.joinVoIPChat({ ...room, fail: push }); },
+            subscribe() { wx.subscribeVoIPVideoMembers({ openIdList: ["c"] }); },
+          });`,
+      },
+      { pages: ["pages/index/index"] },
+      {
+        auth: {
+          privacy: { agreed: true },
+          authSetting: { "scope.camera": true, "scope.record": true },
+          user: { openid: "me" },
+        },
+        voip: { members: ["b", "c"] },
+      },
+    );
+    const call = (handler: string) =>
+      view(1, { type: "event", ownerId: 0, handler, event: tapOn("") });
+    view(1, { type: "ready" });
+    view(1, { type: "voipRoom", roomId: 1, mounted: true, openid: "me", mode: "camera" });
+    view(1, { type: "voipRoom", roomId: 2, mounted: true, openid: "c", mode: "video" });
+    const states = () => toView(sent, "voipRoomState");
+    // Before joining, both windows fail once
+    expect(states()).toMatchObject([
+      { roomId: 1, error: "insertVoIPRoom:fail not in a VoIP chat", fire: true },
+      { roomId: 2, error: "insertVoIPRoom:fail not in a VoIP chat", fire: true },
+    ]);
+
+    call("join");
+    for (let i = 0; i < 6; i++) await settle();
+    call("joinAgain");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 3; i++) await settle();
+    expect(log()).toEqual([
+      { openIdList: ["me", "b", "c"], errCode: 0, errMsg: "joinVoIPChat:ok" },
+      ["me", "b", "c"],
+      { errMsg: "joinVoIPChat:fail 当前已在房间内", errCode: -1 },
+    ]);
+    // Only the first two members show without subscribing
+    expect(states().slice(2)).toEqual([
+      { type: "voipRoomState", roomId: 1, visible: true, muted: false },
+      { type: "voipRoomState", roomId: 2, visible: false, muted: false },
+    ]);
+    call("subscribe");
+    for (let i = 0; i < 3; i++) await settle();
+    expect(states().at(-1)).toEqual({
+      type: "voipRoomState",
+      roomId: 2,
+      visible: true,
+      muted: false,
+    });
+
+    handle({ type: "appHide" });
+    expect(log().at(-1)).toEqual({
+      errCode: -1,
+      errMsg: "onVoIPChatInterrupted:fail 由于退后台，导致会话中断",
+    });
+    // Leaving the room turns the windows black again; only a window that fails when inserted fires error
+    expect(states().at(-1)).toEqual({
+      type: "voipRoomState",
+      roomId: 2,
+      error: "insertVoIPRoom:fail not in a VoIP chat",
+      fire: false,
+    });
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["record"], ["camera", "record"], ["camera"], []]);
+  });
+
+  test("a joinVoIPChat waiting for consent when the app goes to the background does not join", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `
+          const push = (r) => getApp().log.push(r);
+          const room = { signature: "s", nonceStr: "n", timeStamp: 1, groupId: "g" };
+          Page({ join() { wx.joinVoIPChat({ ...room, success: push, fail: push }); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { privacy: { agreed: true }, user: { openid: "me" } } },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "event", ownerId: 0, handler: "join", event: tapOn("") });
+    for (let i = 0; i < 4; i++) await settle();
+    const ui = sent.findLast((message) => message.type === "ui");
+    if (ui?.type !== "ui") throw new Error("no consent dialog");
+    handle({ type: "appHide" });
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(log()).toEqual([{ errMsg: "joinVoIPChat:fail 由于退后台，导致会话中断", errCode: -1 }]);
+    expect(sent.some((message) => message.type === "permissionsInUse")).toBe(false);
+  });
+
+  test("a camera moved while it waits for consent shows in the capsule once", async () => {
+    const { sent, handle, view } = boot(
+      { "app.js": APP, "pages/index/index.js": `Page({});` },
+      { pages: ["pages/index/index"] },
+      { auth: { privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    // Moving an element in the DOM removes and inserts it again
+    view(1, { type: "camera", cameraId: 3, mounted: true });
+    await settle();
+    view(1, { type: "camera", cameraId: 3, mounted: false });
+    view(1, { type: "camera", cameraId: 3, mounted: true });
+    await settle();
+    const ui = sent.find((message) => message.type === "ui") as Extract<
+      LogicToShell,
+      { type: "ui" }
+    >;
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 4; i++) await settle();
+    view(1, { type: "camera", cameraId: 3, mounted: false });
+    await settle();
+    const inUse = sent.flatMap((message) =>
+      message.type === "permissionsInUse" ? [message.kinds] : [],
+    );
+    expect(inUse).toEqual([["camera"], []]);
+    expect(toView(sent, "cameraState")).toEqual([{ type: "cameraState", cameraId: 3 }]);
+  });
+
+  test("triggerEvent reaches the host, bubbles within its owner's template, and crosses components when composed", () => {
+    // The example from WeChat's component event guide: my-component sits in another-component's slot
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({
+          pageEventListener1(e) { getApp().log.push("page1 " + e.currentTarget.id + " " + e.target.id); },
+          pageEventListener2(e) { getApp().log.push("page2 " + e.currentTarget.id); },
+        });`,
+        "components/another/another.js": `Component({ methods: { anotherEventListener() { getApp().log.push("another"); } } });`,
+        "components/mine/mine.js": `Component({ methods: { fire(options) { this.triggerEvent("customevent", {}, options); } } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [
+      [1, 0, "components/another/another", "another"],
+      [2, 0, "components/mine/mine", "mine"],
+    ]);
+    const place = (catchInAnother: boolean) =>
+      view(1, {
+        type: "tree",
+        nodes: [
+          tree(1, 0, "another-component", "", [bind("customevent", "pageEventListener1")]),
+          tree(
+            2,
+            1,
+            "my-component",
+            "",
+            [bind("customevent", "pageEventListener2")],
+            [
+              {
+                ownerId: 1,
+                id: "",
+                dataset: {},
+                events: [bind("customevent", "anotherEventListener", catchInAnother)],
+              },
+              {
+                ownerId: 0,
+                id: "another",
+                dataset: {},
+                events: [bind("customevent", "pageEventListener1")],
+              },
+            ],
+          ),
+        ],
+      });
+    place(false);
+    const mine = currentPage().selectComponent("#mine");
+    const fire = (options: object) => {
+      log().length = 0;
+      mine.fire(options);
+      return [...log()];
+    };
+    expect(fire({})).toEqual(["page2 mine"]);
+    expect(fire({ bubbles: true })).toEqual(["page2 mine", "page1 another mine"]);
+    expect(fire({ bubbles: true, composed: true })).toEqual([
+      "page2 mine",
+      "another",
+      "page1 another mine",
+    ]);
+    // A catch binding inside another-component stops the event there
+    place(true);
+    expect(fire({ bubbles: true, composed: true })).toEqual(["page2 mine", "another"]);
+  });
+
+  test("selectComponent matches tags, ids, classes and combinators within the caller's template", () => {
+    const empty = "Component({});";
+    const { view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "components/list/list.js": empty,
+        "components/item/item.js": empty,
+        "components/wrap/wrap.js": empty,
+        "components/outer/outer.js": empty,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    // <list class="list"><item class="item a" id="i1"/><item class="item" id="i2"/><wrap><item id="i5"/></wrap></list>
+    // <item class="item" id="i3"/><outer id="o"/>, where outer's template has <item class="item inner" id="i4"/>
+    attachAll(view, [
+      [1, 0, "components/list/list", "l"],
+      [2, 0, "components/item/item", "i1"],
+      [3, 0, "components/item/item", "i2"],
+      [7, 0, "components/wrap/wrap", "w"],
+      [8, 0, "components/item/item", "i5"],
+      [4, 0, "components/item/item", "i3"],
+      [5, 0, "components/outer/outer", "o"],
+      [6, 5, "components/item/item", "i4"],
+    ]);
+    view(1, {
+      type: "tree",
+      nodes: [
+        tree(1, 0, "list", "list"),
+        tree(2, 1, "item", "item a"),
+        tree(3, 1, "item", "item"),
+        tree(7, 1, "wrap"),
+        tree(8, 7, "item"),
+        tree(4, 0, "item", "item"),
+        tree(5, 0, "outer"),
+        tree(6, 5, "item", "item inner"),
+      ],
+    });
+    const page = currentPage();
+    const ids = (selector: string, from = page) =>
+      from.selectAllComponents(selector).map((comp: { id: string }) => comp.id);
+    expect(ids(".item")).toEqual(["i1", "i2", "i3"]);
+    expect(ids("item")).toEqual(["i1", "i2", "i5", "i3"]);
+    expect(ids("item.a")).toEqual(["i1"]);
+    expect(ids(".list item")).toEqual(["i1", "i2", "i5"]);
+    expect(ids(".list > item")).toEqual(["i1", "i2"]);
+    expect(ids("#i3, .a")).toEqual(["i1", "i3"]);
+    expect(ids("#o .item")).toEqual([]);
+    expect(ids("#o >>> .item")).toEqual(["i4"]);
+    expect(ids(".inner", page.selectComponent("#o"))).toEqual(["i4"]);
+    expect(page.selectComponent(".missing")).toBeNull();
+    expect(page.selectComponent("#i4")).toBeNull();
+    expect(page.selectComponent("#o").selectComponent("#i4").selectOwnerComponent().id).toBe("o");
+  });
+
+  test("relations link parents and children, and built-in behaviors and definition filters apply", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "pages/other/other.js": "Page({});",
+        "components/list/list.js": `Component({
+          behaviors: ["wx://component-export"],
+          relations: { "../item/item": {
+            type: "child",
+            linked(target) { getApp().log.push("list linked " + target.id); },
+            unlinked(target) { getApp().log.push("list unlinked " + target.id); },
+          } },
+          export() { return { kind: "list" }; },
+        });`,
+        "components/item/item.js": `
+          const marker = Behavior({
+            definitionFilter(fields) { fields.data = Object.assign({}, fields.data, { filtered: true }); },
+          });
+          Component({
+            behaviors: [marker, "wx://form-field"],
+            relations: { "../list/list": { type: "parent", linked(target) { getApp().log.push("item linked " + target.is); } } },
+            methods: { marked() { return this.hasBehavior(marker); } },
+          });`,
+      },
+      { pages: ["pages/index/index", "pages/other/other"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [
+      [1, 0, "components/list/list", "l"],
+      [2, 0, "components/item/item", "i1", { name: "size", value: "L" }],
+      [3, 0, "components/item/item", "i2"],
+    ]);
+    view(1, {
+      type: "tree",
+      nodes: [tree(1, 0, "list"), tree(2, 1, "item"), tree(3, 1, "item")],
+    });
+    expect([...(log() as string[])].sort((a, b) => a.localeCompare(b))).toEqual([
+      "item linked components/list/list",
+      "item linked components/list/list",
+      "list linked i1",
+      "list linked i2",
+    ]);
+    const page = currentPage();
+    // wx://component-export: selectComponent returns what export returns
+    expect(page.selectComponent("#l")).toEqual({ kind: "list" });
+    const item = page.selectComponent("#i1");
+    const list = item.getRelationNodes("../list/list")[0];
+    expect(list.getRelationNodes("../item/item").map((comp: { id: string }) => comp.id)).toEqual([
+      "i1",
+      "i2",
+    ]);
+    // wx://form-field adds the name and value properties, and a form submits them
+    expect(item.data).toMatchObject({ name: "size", value: "L", filtered: true });
+    expect(item.marked()).toBe(true);
+    expect(item.hasBehavior("wx://form-field")).toBe(true);
+    expect(list.hasBehavior("wx://form-field")).toBe(false);
+    const inits = toView(sent, "componentInit") as { nodeId: number; options: object }[];
+    expect(inits.find((init) => init.nodeId === 2)!.options).toMatchObject({ formField: true });
+
+    log().length = 0;
+    view(1, { type: "detach", nodeIds: [3] });
+    expect(log()).toEqual(["list unlinked i2"]);
+    expect(list.getRelationNodes("../item/item")).toHaveLength(1);
+
+    // Closing the whole page ends the links that are left
+    (globalThis as any).wx.redirectTo({ url: "/pages/other/other" });
+    await settle();
+    expect(log()).toEqual(["list unlinked i2", "list unlinked i1"]);
+    expect(list.getRelationNodes("../item/item")).toHaveLength(0);
+  });
+
+  test("pure data fields stay in the logic layer, and routers resolve against the component's path", async () => {
+    const { sent, view } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": "Page({});",
+        "pages/detail/detail.js": "Page({});",
+        "components/card/card.js": `Component({
+          options: { pureDataPattern: /^_/ },
+          data: { _raw: 1, shown: 2 },
+          methods: { update() { this.setData({ _raw: 3, shown: 4 }); } },
+        });`,
+      },
+      { pages: ["pages/index/index", "pages/detail/detail"] },
+    );
+    view(1, { type: "ready" });
+    attachAll(view, [[1, 0, "components/card/card", "card"]]);
+    const card = currentPage().selectComponent("#card");
+    card.update();
+    expect(toView(sent, "componentInit")[0]).toMatchObject({ data: { shown: 2 } });
+    expect((toView(sent, "componentInit")[0] as { data: object }).data).not.toHaveProperty("_raw");
+    expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 1, patch: { shown: 4 } });
+    expect((toView(sent, "setData").at(-1) as { patch: object }).patch).not.toHaveProperty("_raw");
+    expect(card.data._raw).toBe(3);
+
+    card.router.navigateTo({ url: "../../pages/detail/detail?id=7" });
+    await settle();
+    expect(lastRoute(sent).stack.map((entry) => entry.route)).toEqual([
+      "pages/index/index",
+      "pages/detail/detail",
+    ]);
+  });
+
+  test("a launch page that does not exist calls onPageNotFound, which may redirect", async () => {
+    const pages = ["pages/index/index", "pages/other/other"];
+    const files = {
+      "app.js": `App({ log: [], onPageNotFound(res) { this.log.push(res); wx.redirectTo({ url: "/pages/other/other" }); } });`,
+      "pages/index/index.js": "Page({});",
+      "pages/other/other.js": "Page({});",
+    };
+    const launch = { path: "pages/missing/missing", query: { a: "1" } };
+    const redirected = boot(files, { pages }, {}, {}, launch);
+    await settle();
+    expect(redirected.log()).toEqual([
+      { path: "pages/missing/missing", query: { a: "1" }, isEntryPage: true },
+    ]);
+    expect(lastRoute(redirected.sent).stack.map((entry) => entry.route)).toEqual([
+      "pages/other/other",
+    ]);
+
+    // Without a redirect, the entry page opens
+    const plain = boot({ ...files, "app.js": APP }, { pages }, {}, {}, launch);
+    await settle();
+    expect(lastRoute(plain.sent).stack.map((entry) => entry.route)).toEqual(["pages/index/index"]);
+  });
+
+  test("a tab page's custom tab bar exists in onShow and is the component the view attaches", () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onShow() { this.getTabBar().setData({ selected: 1 }); } });`,
+        "custom-tab-bar/index.js": `Component({
+          data: { selected: 0 },
+          lifetimes: { attached() { getApp().log.push("attached"); } },
+        });`,
+        "components/card/card.js": `Component({});`,
+      },
+      {
+        pages: ["pages/index/index"],
+        tabBar: { custom: true, list: [{ pagePath: "pages/index/index" }] },
+      },
+    );
+    view(1, { type: "ready" });
+    // A component of the page may attach before the tab bar does
+    attachAll(view, [
+      [3, 0, "components/card/card", ""],
+      [4, 0, "custom-tab-bar/index", ""],
+    ]);
+    expect(toView(sent, "componentInit")).toMatchObject([
+      { nodeId: 3 },
+      { nodeId: 4, data: { selected: 1 } },
+    ]);
+    expect(log()).toEqual(["attached"]);
+    const page = currentPage();
+    page.getTabBar().setData({ selected: 0 });
+    expect(toView(sent, "setData").at(-1)).toMatchObject({ nodeId: 4, patch: { selected: 0 } });
+  });
+
+  /** Sends a button open-type event of page 1, as the view does after a tap. */
+  const openTypeEvent = (
+    view: (webviewId: number, message: ViewToLogic) => void,
+    openType: string,
+    type: string,
+    handler: string,
+    openTypeProps?: Record<string, unknown>,
+  ) => {
+    const target = { id: "", dataset: {} };
+    view(1, {
+      type: "event",
+      ownerId: 0,
+      handler,
+      openType,
+      openTypeProps,
+      event: { type, timeStamp: 0, target, currentTarget: target, detail: {} },
+    });
+  };
+  const uiCalls = (sent: LogicToShell[], name: string) =>
+    sent.filter(
+      (message): message is Extract<LogicToShell, { type: "ui" }> =>
+        message.type === "ui" && message.name === name,
+    );
+
+  test("the openSetting button shows the scopes asked for, and a switch turned on there reaches getSetting", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onSetting(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { authSetting: { "scope.userLocation": false, "scope.camera": true } } },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "openSetting", "opensetting", "onSetting");
+    await settle();
+    const [ui] = uiCalls(sent, "openSetting");
+    expect(ui!.args).toMatchObject({
+      appName: "Demo",
+      scopes: [
+        { scope: "scope.userLocation", description: "获取你的位置信息", allowed: false },
+        { scope: "scope.camera", description: "使用你的摄像头", allowed: true },
+      ],
+    });
+    // The event fires only when the user goes back
+    expect(log()).toEqual([]);
+
+    handle({
+      type: "uiResult",
+      callId: ui!.callId,
+      result: { authSetting: { "scope.userLocation": true, "scope.camera": true } },
+    });
+    await settle();
+    const authSetting = { "scope.userLocation": true, "scope.camera": true };
+    expect(log()).toEqual([{ authSetting, errMsg: "openSetting:ok" }]);
+    const wx = (globalThis as unknown as { wx: Record<string, any> }).wx;
+    await expect(wx.getSetting()).resolves.toMatchObject({ authSetting });
+  });
+
+  test("the contact button fires bindcontact once the chat closes, with the tapped card's path and query", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onContact(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "contact", "contact", "onContact", {
+      "show-message-card": true,
+      "send-message-title": "Order 7",
+      "send-message-img": "/images/order.png",
+      "send-message-path": "pages/order/order?id=7&from=chat",
+    });
+    await settle();
+    const [withCard] = uiCalls(sent, "contact");
+    expect(withCard!.args).toEqual({
+      appName: "Demo",
+      card: {
+        title: "Order 7",
+        img: "/images/order.png",
+        path: "pages/order/order?id=7&from=chat",
+      },
+    });
+    expect(log()).toEqual([]);
+    handle({ type: "uiResult", callId: withCard!.callId, result: { tapped: true } });
+    await settle();
+
+    // Closed without tapping a card: path and query are empty
+    openTypeEvent(view, "contact", "contact", "onContact", {});
+    await settle();
+    const [, plain] = uiCalls(sent, "contact");
+    expect(plain!.args).toEqual({ appName: "Demo" });
+    handle({ type: "uiResult", callId: plain!.callId, result: {} });
+    await settle();
+    expect(log()).toEqual([
+      { path: "pages/order/order", query: { id: "7", from: "chat" }, errMsg: "enterContact:ok" },
+      { path: "", query: {}, errMsg: "enterContact:ok" },
+    ]);
+  });
+
+  test("the launchApp button fails with invalid scene, and the feedback button fires nothing", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onError(e) { getApp().log.push(e.type, e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    // The view sends launchApp as the button's error event
+    openTypeEvent(view, "launchApp", "error", "onError");
+    openTypeEvent(view, "feedback", "", "onError");
+    await settle();
+    expect(log()).toEqual(["error", { errMsg: "invalid scene" }]);
+    expect(uiCalls(sent, "feedback")).toHaveLength(1);
+  });
+
+  test("the getPhoneNumber detail has encrypted data and an iv next to the code, for older backends", async () => {
+    const { view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ onPhone(e) { getApp().log.push(e.detail); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow", privacy: { agreed: true } } },
+    );
+    view(1, { type: "ready" });
+    openTypeEvent(view, "getPhoneNumber", "getphonenumber", "onPhone");
+    await settle();
+    const [detail] = log() as Record<string, string>[];
+    expect(detail).toMatchObject({ errMsg: "getPhoneNumber:ok" });
+    expect(decodeCode(detail!.code!)).toMatchObject({ kind: "phone" });
+    expect(detail!.encryptedData).toMatch(/^[A-Za-z0-9+/]{100,}={0,2}$/);
+    expect(atob(detail!.iv!)).toHaveLength(16);
+    expect(detail!.cloudID).toMatch(/^\w+$/);
+  });
+
+  test("a long press on an image with show-menu-by-longpress opens WeChat's image menu", async () => {
+    const { sent, view, handle } = boot(
+      { "app.js": APP, "pages/index/index.js": "Page({});" },
+      { pages: ["pages/index/index"] },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "imageMenu" });
+    await settle();
+    const uis = () =>
+      sent.filter((message) => message.type === "ui") as Extract<LogicToShell, { type: "ui" }>[];
+    expect(uis()[0]).toMatchObject({
+      name: "showActionSheet",
+      args: { itemList: ["发送给朋友", "收藏", "保存图片", "搜一搜"] },
+    });
+
+    handle({ type: "uiResult", callId: uis()[0]!.callId, result: { tapIndex: 2 } });
+    await settle();
+    expect(uis()[1]).toMatchObject({ name: "showToast", args: { title: "已保存到系统相册" } });
+  });
+
+  test("a navigator to another Mini Program reports to its success and complete, and exit leaves", async () => {
+    const { sent, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `Page({ on(e) { getApp().log.push([e.type, e.detail.errMsg]); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { consent: "allow" } },
+    );
+    view(1, { type: "ready" });
+    const target = { id: "nav", dataset: {} };
+    const handlers = {
+      success: { ownerId: 0, handler: "on" },
+      fail: { ownerId: 0, handler: "on" },
+      complete: { ownerId: 0, handler: "on" },
+    };
+    view(1, {
+      type: "navigateMiniProgram",
+      openType: "navigate",
+      props: { "app-id": "wx1111111111111111", path: "pages/a/a" },
+      target,
+      handlers,
+    });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(log()).toEqual([
+      ["success", "navigateToMiniProgram:ok"],
+      ["complete", "navigateToMiniProgram:ok"],
+    ]);
+
+    view(1, { type: "navigateMiniProgram", openType: "exit", props: {}, target, handlers });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(sent.filter((message) => message.type === "exit")).toHaveLength(1);
+  });
+
+  test("official-account shows only after a launch from a scanned code", async () => {
+    const files = { "app.js": APP, "pages/index/index.js": "Page({});" };
+    const state = (config: SimulatorConfig, scene?: number) => {
+      const { sent, view } = boot(
+        files,
+        { pages: ["pages/index/index"] },
+        config,
+        {},
+        undefined,
+        scene,
+      );
+      view(1, { type: "ready" });
+      view(1, { type: "officialAccount", accountId: 1 });
+      return toView(sent, "officialAccountState")[0];
+    };
+    expect(state({})).toMatchObject({ status: 5, errMsg: "场景值错误" });
+    expect(state({ officialAccount: { name: "Demo News" } }, 1047)).toEqual({
+      type: "officialAccountState",
+      accountId: 1,
+      status: 0,
+      errMsg: "ok",
+      name: "Demo News",
+    });
+    expect(state({ officialAccount: { status: 4 } }, 1011)).toMatchObject({ status: 4 });
   });
 });

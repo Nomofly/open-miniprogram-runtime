@@ -7,7 +7,7 @@
  */
 import type { WebviewBundle } from "@omr/compiler";
 import { startView } from "@omr/renderer";
-import type { LogicToView } from "@omr/runtime";
+import type { AdConfig, LogicToView } from "@omr/runtime";
 
 /** The first message from the shell. */
 export interface WebviewInit {
@@ -15,26 +15,45 @@ export interface WebviewInit {
   webviewId: number;
   bundle: WebviewBundle;
   windowWidth: number;
+  /** How tall the simulated keyboard is. */
+  keyboardHeight: number;
   hairline: number;
   styleV2: boolean;
+  /** Whether built-in components take their dark defaults: app.json `"darkmode": true` in the dark theme. */
+  dark: boolean;
+  /** `ad` of omr.config.json, for `<ad>` and `<ad-custom>`. */
+  ad?: AdConfig;
+  /** `location` of omr.config.json, where `<map>` puts the user. */
+  location?: { latitude: number; longitude: number };
 }
 
-type FromShell = WebviewInit | { omr: "logic"; message: LogicToView };
+type FromShell =
+  | WebviewInit
+  | { omr: "logic"; message: LogicToView }
+  /** The theme changed; `prefers-color-scheme` follows the iframe's `color-scheme` by itself. */
+  | { omr: "theme"; dark: boolean };
 
 let handle: ((message: LogicToView) => void) | undefined;
 
 addEventListener("message", (event: MessageEvent<FromShell>) => {
   if (event.source !== parent) return;
   const data = event.data;
+  if (data?.omr === "init" || data?.omr === "theme") {
+    document.documentElement.classList.toggle("omr-dark", data.dark);
+  }
   if (data?.omr === "init" && !handle) {
     // The opaque origin cannot be named, so the shell's origin is this document's URL origin
     const shell = location.origin;
     handle = startView({
       bundle: data.bundle,
       windowWidth: data.windowWidth,
+      keyboardHeight: data.keyboardHeight,
       hairline: data.hairline,
       assetBase: "/__omr/files/",
       styleV2: data.styleV2,
+      ad: data.ad,
+      location: data.location,
+      regionStreetsUrl: "/__omr/region-streets",
       post: (message) =>
         parent.postMessage({ omr: "view", webviewId: data.webviewId, message }, shell),
     });

@@ -1,8 +1,9 @@
+import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { MiniProgramProject } from "./project.ts";
 import { readJson } from "./project.ts";
-import { compileWxml, type WxmlFile } from "./wxml.ts";
+import { compileWxml, type TemplateNode, type WxmlFile } from "./wxml.ts";
 import { compileWxss } from "./wxss.ts";
 
 /** A page or custom component as the view layer sees it. */
@@ -15,6 +16,8 @@ export interface ScopeDefinition {
   usingComponents: Record<string, string>;
   /** Class prefix of a component's scoped styles; empty for a page. */
   prefix: string;
+  /** `componentGenerics`: each generic tag's default component path, or `""` without a default. */
+  generics?: Record<string, string>;
 }
 
 /** Everything one page's view layer (its WebView) needs to render. */
@@ -30,6 +33,8 @@ export interface WebviewBundle {
   css: string;
   /** The page's window configuration: app.json `window` merged with the page's json. */
   window: Record<string, unknown>;
+  /** On a tab page of an app with `tabBar.custom`: the `custom-tab-bar` component it shows at the bottom. */
+  customTabBar?: string;
 }
 
 /** Window fields a page json may override. */
@@ -72,10 +77,12 @@ export async function compilePage(
     throw new Error(`page "${route}" is not listed in app.json`);
   }
   const { root } = project;
+  const alias = (project.appJson.resolveAlias as Record<string, string> | undefined) ?? {};
   const globalComponents = await resolveUsingComponents(
     root,
     "app.json",
     (project.appJson.usingComponents as Record<string, string> | undefined) ?? {},
+    alias,
   );
 
   const files: Record<string, WxmlFile> = {};
@@ -89,6 +96,7 @@ export async function compilePage(
     files[file] = compiled;
     for (const module of compiled.wxs) {
       if (module.src) await loadWxs(module.src);
+      else await loadWxsRequires(module.code ?? "", file);
     }
     for (const dep of [...compiled.imports, ...compiled.includes]) await loadWxml(dep);
   };
@@ -96,8 +104,17 @@ export async function compilePage(
     if (file in wxs) return;
     const source = (await readOptional(path.join(root, file))) ?? "";
     wxs[file] = source;
-    for (const match of source.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)) {
-      await loadWxs(path.posix.join(path.posix.dirname(file), match[1]!));
+    await loadWxsRequires(source, file);
+  };
+  /** Loads the `.wxs` files that WXS code written in `file` requires. */
+  const loadWxsRequires = async (code: string, file: string): Promise<void> => {
+    for (const match of code.matchAll(/\brequire\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = match[1]!;
+      await loadWxs(
+        spec.startsWith("/")
+          ? path.posix.normalize(spec.slice(1))
+          : path.posix.join(path.posix.dirname(file), spec),
+      );
     }
   };
   const loadScope = async (scopePath: string, prefix: string): Promise<ScopeDefinition> => {
@@ -106,30 +123,75 @@ export async function compilePage(
       root,
       `${scopePath}.json`,
       (json.usingComponents as Record<string, string> | undefined) ?? {},
+      alias,
     );
+    const usingComponents = { ...globalComponents, ...own };
+    // A placeholder stands in for a component that is not there, such as one in a missing subpackage
+    for (const [tag, placeholder] of Object.entries(
+      (json.componentPlaceholder as Record<string, string> | undefined) ?? {},
+    )) {
+      const stand = usingComponents[placeholder];
+      if (!Object.hasOwn(usingComponents, tag) && stand) usingComponents[tag] = stand;
+    }
     const scope: ScopeDefinition = {
       path: scopePath,
       template: `${scopePath}.wxml`,
-      usingComponents: { ...globalComponents, ...own },
+      usingComponents,
       prefix,
     };
+    const genericSpecs = json.componentGenerics as Record<string, unknown> | undefined;
+    if (genericSpecs && typeof genericSpecs === "object") {
+      const defaults: Record<string, string> = {};
+      for (const [name, spec] of Object.entries(genericSpecs)) {
+        const fallback = (spec as { default?: unknown } | null)?.default;
+        if (typeof fallback === "string") defaults[name] = fallback;
+      }
+      const resolved = await resolveUsingComponents(root, `${scopePath}.json`, defaults, alias);
+      scope.generics = Object.fromEntries(
+        Object.keys(genericSpecs).map((name) => [name, resolved[name] ?? ""]),
+      );
+    }
     await loadWxml(scope.template);
     return scope;
   };
 
   const page = await loadScope(route, "");
+  const tabBar = project.appJson.tabBar as
+    | { custom?: boolean; list?: { pagePath?: string }[] }
+    | undefined;
+  const customTabBar =
+    tabBar?.custom === true &&
+    (tabBar.list ?? []).some(
+      (item) => path.posix.normalize(String(item.pagePath ?? "").replace(/^\/+/, "")) === route,
+    )
+      ? await findComponent(root, ["custom-tab-bar"])
+      : undefined;
   const pending = [page];
+  const prefixes = new Set<string>();
   while (pending.length > 0) {
     const scope = pending.pop()!;
-    for (const componentPath of Object.values(scope.usingComponents)) {
-      if (componentPath in components) continue;
+    for (const componentPath of [
+      ...Object.values(scope.usingComponents),
+      ...Object.values(scope.generics ?? {}),
+      ...(scope === page && customTabBar ? [customTabBar] : []),
+    ]) {
+      if (!componentPath || componentPath in components) continue;
       // Reserve the entry first so a component that uses itself is not loaded again
       components[componentPath] = undefined!;
-      const component = await loadScope(componentPath, componentPrefix(componentPath));
+      // Distinct paths may hash alike, but each component of the page needs its own prefix
+      let prefix = componentPrefix(componentPath);
+      for (let n = 2; prefixes.has(prefix); n++) prefix = `${componentPrefix(componentPath)}_${n}`;
+      prefixes.add(prefix);
+      const component = await loadScope(componentPath, prefix);
       components[componentPath] = component;
       pending.push(component);
     }
   }
+  // Rendering starts at the page and component templates, so cycles are cut where they close from there
+  breakIncludeCycles(
+    files,
+    [page, ...Object.values(components)].map((scope) => scope.template),
+  );
 
   const cssParts = [await compileWxss(root, "app.wxss")];
   for (const component of Object.values(components)) {
@@ -145,7 +207,55 @@ export async function compilePage(
     wxs,
     css: cssParts.filter(Boolean).join("\n"),
     window: await pageWindow(project, route),
+    ...(customTabBar ? { customTabBar } : {}),
   };
+}
+
+/**
+ * Replaces each `<include>` that leads back to a file it is rendered from, such
+ * as a file that includes itself, with an empty block, so that rendering ends.
+ * Imports need no check: templates are looked up only in directly imported files.
+ */
+function breakIncludeCycles(files: Record<string, WxmlFile>, roots: string[]): void {
+  const done = new Set<string>();
+  const active = new Set<string>();
+  const visit = (file: string): void => {
+    if (done.has(file) || !files[file]) return;
+    active.add(file);
+    const check = (node: TemplateNode): TemplateNode => {
+      switch (node.type) {
+        case "include":
+          if (active.has(node.src)) {
+            return {
+              type: "element",
+              uid: node.uid,
+              tag: "block",
+              attrs: {},
+              events: [],
+              children: [],
+            };
+          }
+          visit(node.src);
+          return node;
+        case "element":
+          node.children = node.children.map(check);
+          return node;
+        case "if":
+          for (const branch of node.branches) branch.node = check(branch.node);
+          return node;
+        case "for":
+          node.node = check(node.node);
+          return node;
+        default:
+          return node;
+      }
+    };
+    // Template definitions are not checked: they render only through `<template is>`
+    files[file].nodes = files[file].nodes.map(check);
+    active.delete(file);
+    done.add(file);
+  };
+  for (const file of [...roots, ...Object.keys(files)]) visit(file);
 }
 
 /**
@@ -157,10 +267,13 @@ async function resolveUsingComponents(
   root: string,
   jsonFile: string,
   using: Record<string, string>,
+  alias: Record<string, string> = {},
 ): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
   const dir = path.posix.dirname(jsonFile);
-  for (const [tag, spec] of Object.entries(using)) {
+  for (const [tag, written] of Object.entries(using)) {
+    if (typeof written !== "string") continue;
+    const spec = applyAlias(written, alias);
     if (spec.startsWith("plugin://")) continue;
     let candidates: string[];
     if (spec.startsWith("/")) {
@@ -180,6 +293,19 @@ async function resolveUsingComponents(
     if (found) resolved[tag] = found;
   }
   return resolved;
+}
+
+/**
+ * Applies app.json `resolveAlias`, such as `{ "~/*": "/src/*" }`: the first
+ * key whose prefix starts the path replaces that prefix.
+ */
+export function applyAlias(spec: string, alias: Record<string, string>): string {
+  for (const [from, to] of Object.entries(alias)) {
+    if (typeof to !== "string" || !from.endsWith("/*") || !to.endsWith("/*")) continue;
+    const prefix = from.slice(0, -1);
+    if (spec.startsWith(prefix)) return to.slice(0, -1) + spec.slice(prefix.length);
+  }
+  return spec;
 }
 
 async function findComponent(root: string, candidates: string[]): Promise<string | undefined> {
@@ -202,6 +328,9 @@ export function componentPrefix(componentPath: string): string {
  * Bundles every `.js` file of the Mini Program into one script for the logic
  * layer. Each file becomes a CommonJS module registered with
  * `__omrDefine(path, factory)`; the logic layer requires them on demand.
+ * The module body runs in a function of its own, so it may declare a name the
+ * factory injects, such as `const fetch`, and its `"use strict"` still applies.
+ * Each source line keeps its position after the factory's first line.
  */
 export async function compileAppService(project: MiniProgramProject): Promise<string> {
   const files = await listFiles(project.root, ".js");
@@ -209,24 +338,37 @@ export async function compileAppService(project: MiniProgramProject): Promise<st
   for (const file of files) {
     const source = await readFile(path.join(project.root, file), "utf8");
     parts.push(
-      `__omrDefine(${JSON.stringify(file)}, function (require, module, exports, window, document, self, location, navigator, localStorage, XMLHttpRequest, WebSocket, fetch, importScripts) {\n${source}\n});`,
+      `__omrDefine(${JSON.stringify(file)}, function (require, module, exports, window, document, self, location, navigator, localStorage, XMLHttpRequest, WebSocket, fetch, importScripts) { return (function () {\n${source}\n}).apply(this, arguments); });`,
     );
   }
   return `${parts.join("\n")}\n//# sourceURL=omr://app-service.js\n`;
 }
 
-/** Root-relative paths of files with `extension`, skipping `node_modules` and dot directories. */
+/**
+ * Root-relative paths of files with `extension`, skipping `node_modules`, dot
+ * files and directories, directories that cannot be read, and symbolic links,
+ * which may loop or lead out of the project.
+ */
 async function listFiles(root: string, extension: string): Promise<string[]> {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(extension))
-    .map((entry) =>
-      path.relative(root, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),
-    )
-    .filter(
-      (file) => !file.split("/").some((part) => part === "node_modules" || part.startsWith(".")),
-    )
-    .sort();
+  const files: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(path.join(root, dir), { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM" || code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const file = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(file);
+      else if (entry.isFile() && entry.name.endsWith(extension)) files.push(file);
+    }
+  };
+  await walk("");
+  return files.sort();
 }
 
 async function readOptional(file: string): Promise<string | undefined> {
