@@ -376,11 +376,13 @@ export class WxLivePusher extends LiveStream {
   }
   private start(): void {
     if (!this.allowed()) throw new Error(this.auth?.errMsg ?? "camera is not ready");
-    if (this.state !== "idle" || this.suspended) return;
+    if (this.state !== "idle") return;
+    // Asked in the background, even after the preview stopped there, the push waits for the return
     if (this.background) {
       this.deferred = { push: true };
       return;
     }
+    if (this.suspended) return;
     this.startPreview();
     if (!PUSHABLE.test(this.str("url"))) {
       this.codes([3002, -1307]);
@@ -463,14 +465,6 @@ export class WxLivePusher extends LiveStream {
   omrPageVisibility(visible: boolean, background: boolean): void {
     if (!background) return;
     this.background = !visible;
-    if (visible && this.deferred) {
-      const { push } = this.deferred;
-      this.deferred = undefined;
-      if (this.allowed() && this.mounted) {
-        this.startPreview();
-        if (push) this.start();
-      }
-    }
     // Returning clears the suspension even when the preview stopped in the background
     if (!visible && !this.suspended && this.previewing) {
       this.suspended = true;
@@ -481,6 +475,15 @@ export class WxLivePusher extends LiveStream {
       this.suspended = false;
       this.render();
       if (this.state === "pushing") this.codes([1002], () => this.startNet());
+    }
+    // What was asked for in the background starts once the suspension is over
+    if (visible && this.deferred) {
+      const { push } = this.deferred;
+      this.deferred = undefined;
+      if (this.allowed() && this.mounted) {
+        this.startPreview();
+        if (push) this.start();
+      }
     }
   }
   omrCall(method: string, _args: unknown[]): void {

@@ -429,6 +429,25 @@ describe("live", () => {
     }
   });
 
+  test("a push asked for in the background after the suspended preview stopped starts on return", () => {
+    vi.useFakeTimers();
+    try {
+      const pusher = mount("wx-live-pusher", { url: "rtmp://a/push" }) as Live;
+      pusher.omrLivePusherState({});
+      pusher.omrPageVisibility(false, true);
+      void pusher.omrCall!("stopPreview", []);
+      const fired = codes(pusher);
+      void pusher.omrCall!("start", []);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([]);
+      pusher.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toContain(1001);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a pusher whose preview stopped in the background can start once the app returns", () => {
     vi.useFakeTimers();
     try {
