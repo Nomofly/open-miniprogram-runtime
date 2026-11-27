@@ -305,6 +305,57 @@ describe("wheel", () => {
   });
 });
 
+describe("live", () => {
+  type Live = BuiltinElement & {
+    omrPageVisibility(visible: boolean, background: boolean): void;
+    omrLivePusherState(state: { errCode?: number }): void;
+  };
+  const codes = (el: Element) => {
+    const fired: number[] = [];
+    el.addEventListener("omr-event", (event) => {
+      const { name, detail } = (event as CustomEvent<{ name: string; detail: { code: number } }>)
+        .detail;
+      if (name === "statechange") fired.push(detail.code);
+    });
+    return fired;
+  };
+
+  test("a player whose src changed in the background plays the new stream when the app returns", () => {
+    vi.useFakeTimers();
+    try {
+      const player = mount("wx-live-player", { src: "rtmp://a/live", autoplay: true }) as Live;
+      vi.advanceTimersByTime(2000);
+      player.omrPageVisibility(false, true);
+      player.omrUpdate({ src: "rtmp://b/live", autoplay: true });
+      const fired = codes(player);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([]);
+      player.omrPageVisibility(true, true);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toEqual([2001, 2002, 2008, 2026, 2003, 2004]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a pusher whose preview stopped in the background can start once the app returns", () => {
+    vi.useFakeTimers();
+    try {
+      const pusher = mount("wx-live-pusher", { url: "rtmp://a/push" }) as Live;
+      pusher.omrLivePusherState({});
+      pusher.omrPageVisibility(false, true);
+      void pusher.omrCall!("stopPreview", []);
+      pusher.omrPageVisibility(true, true);
+      const fired = codes(pusher);
+      void pusher.omrCall!("start", []);
+      vi.advanceTimersByTime(2000);
+      expect(fired).toContain(1001);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("form controls", () => {
   test("a picker without value submits its mode's default, and a reset returns to it", () => {
     const selector = mount("wx-picker", { range: ["a", "b"] });

@@ -95,6 +95,8 @@ const around = (base: number, spread: number) =>
 export class WxLivePlayer extends LiveStream {
   private state: "idle" | "playing" | "paused" = "idle";
   private suspended = false;
+  /** A play asked for while the Mini Program was in the background, started when it returns. */
+  private playOnShow = false;
   private muted?: boolean;
   private fullScreen = false;
   private readonly fullScreenStyle: HTMLStyleElement;
@@ -123,7 +125,11 @@ export class WxLivePlayer extends LiveStream {
     this.render();
   }
   private play(): void {
-    if (this.state === "playing" || this.suspended) return;
+    if (this.suspended) {
+      if (this.state === "idle") this.playOnShow = true;
+      return;
+    }
+    if (this.state === "playing") return;
     if (this.state === "paused") {
       this.resume();
       return;
@@ -142,6 +148,7 @@ export class WxLivePlayer extends LiveStream {
   private stop(): void {
     this.halt();
     this.state = "idle";
+    this.playOnShow = false;
     this.render();
   }
   private pause(): void {
@@ -207,7 +214,13 @@ export class WxLivePlayer extends LiveStream {
         this.render();
       } else if (visible && this.suspended) {
         this.suspended = false;
-        this.resume();
+        // A source that changed in the background starts over; the same one goes on
+        if (this.playOnShow) {
+          this.playOnShow = false;
+          this.play();
+        } else {
+          this.resume();
+        }
       }
       return;
     }
@@ -429,8 +442,9 @@ export class WxLivePusher extends LiveStream {
     this.label.textContent = `模拟推流画面 · ${this.front ? "前置" : "后置"} · ${this.str("mode", "RTC")}${muted ? " · 静音" : ""}`;
   }
   omrPageVisibility(visible: boolean, background: boolean): void {
-    if (!background || !this.previewing) return;
-    if (!visible && !this.suspended) {
+    if (!background) return;
+    // Returning clears the suspension even when the preview stopped in the background
+    if (!visible && !this.suspended && this.previewing) {
       this.suspended = true;
       this.halt();
       if (this.state !== "idle") emit(this, "statechange", { code: 5000 });
