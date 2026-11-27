@@ -41,6 +41,22 @@ import { createWebViewProxies, isLoopbackAddress } from "./web-view-proxy.ts";
 const fromThisMachine = (req: IncomingMessage) =>
   isLoopbackAddress((req.socket.remoteAddress ?? "").replace(/^::ffff:(?=\d+\.)/, ""));
 
+/**
+ * Whether a request comes from the simulator's own pages, not from another site
+ * open in a browser on this machine. Browsers mark requests from other sites,
+ * including other ports of `localhost`, with `Sec-Fetch-Site`. A POST must also
+ * carry the content type its caller sends, which a cross-site form or a
+ * `no-cors` fetch cannot send without a CORS preflight.
+ */
+const fromSimulator = (req: IncomingMessage, contentType?: string) => {
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin" && site !== "none") return false;
+  return (
+    contentType === undefined ||
+    req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() === contentType
+  );
+};
+
 export interface SimulatorPluginOptions {
   /** The Mini Program project directory. */
   project: string;
@@ -201,6 +217,12 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       !fromThisMachine(req)
     ) {
       sendJson(res, 403, { error: "the simulator's proxies serve only this machine" });
+    } else if (
+      (pathname === WEB_VIEW_PROXY_PATH && !fromSimulator(req)) ||
+      (pathname === REQUEST_PROXY_PATH && !fromSimulator(req, "application/json")) ||
+      (pathname === FS_RPC_PATH && !fromSimulator(req, "application/octet-stream"))
+    ) {
+      sendJson(res, 403, { error: "only the simulator's own pages may use this" });
     } else if (pathname === WEB_VIEW_PROXY_PATH) {
       // Where the shell opens a <web-view> page: the proxy for its origin, at the same path
       let target: URL | undefined;
