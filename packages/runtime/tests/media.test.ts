@@ -209,6 +209,7 @@ describe("media APIs", () => {
             const stopped = make("stopped");
             await wait(20);
             stopped.play();
+            stopped.play();
             stopped.stop();
             // Destroyed by its own play listener, while looping
             const destroyed = wx.createInnerAudioContext();

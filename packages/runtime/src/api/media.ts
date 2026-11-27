@@ -384,8 +384,11 @@ class InnerAudio {
       setTimeout(() => this.emit("Error", { errMsg: "src is empty", errCode: 10003 }), 0);
       return;
     }
-    if (this.loaded) this.queued = setTimeout(() => this.start(), 0);
-    else this.playWhenLoaded = true;
+    if (this.loaded) {
+      // One queued start at a time, so stop and pause cancel every play called before them
+      clearTimeout(this.queued);
+      this.queued = setTimeout(() => this.start(), 0);
+    } else this.playWhenLoaded = true;
   }
   pause() {
     // A play still waiting to start or to load is called off too

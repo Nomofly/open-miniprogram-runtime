@@ -8,7 +8,7 @@
  *   replays them on the canvas at the device pixel ratio.
  */
 import { fsFileUrl, isFsPath } from "./context.ts";
-import { asyncApi, type AnyFunction, type Options } from "./common.ts";
+import { asyncApi, safeCall, type AnyFunction, type Options } from "./common.ts";
 import type { ApiContext } from "./context.ts";
 import { bytesToBase64 } from "./files.ts";
 import { proxyStream } from "./network.ts";
@@ -430,7 +430,8 @@ export function createCanvasApis({ host, files }: ApiContext) {
         // After the canvas's earlier draws, even of other contexts, whether they worked or not
         const run = (drawing.get(canvasId) ?? Promise.resolve()).then(() =>
           draw(drawn, Boolean(reserve)).then(
-            () => callback?.(),
+            // A callback that throws is reported and does not hold up the canvas's next draws
+            () => safeCall(callback, undefined),
             (error: Error) => console.error(`[omr] CanvasContext.draw: ${error.message}`),
           ),
         );

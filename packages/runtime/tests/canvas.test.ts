@@ -267,14 +267,14 @@ describe("legacy CanvasContext", () => {
   };
   const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-  test("draws land in the order they were made, even when an earlier one waits for an image", async () => {
+  test("draws land in the order they were made, even when an earlier one waits for an image or its callback throws", async () => {
     const { calls, arrive } = stubDrawing();
     const sent: LogicToShell[] = [];
     const log = boot(
       `
       const first = wx.createCanvasContext("c");
       first.drawImage("https://img.example.com/a.png", 0, 0);
-      first.draw(true, () => log("first"));
+      first.draw(true, () => { log("first"); throw new Error("callback broke"); });
       const second = wx.createCanvasContext("c");
       second.fillRect(1, 2, 3, 4);
       second.draw(true, () => log("second"));
