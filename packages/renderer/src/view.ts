@@ -23,6 +23,7 @@ import { toText } from "./expression.ts";
 import { BASE_CSS, defineBuiltins, type BuiltinElement, type OmrEventDetail } from "./builtins.ts";
 import { setAdConfig } from "./components/ad.ts";
 import { emit, lengthOf } from "./components/base.ts";
+import { setAppBackground } from "./components/live.ts";
 import { setMapLocation } from "./components/map.ts";
 import { setStreetsUrl } from "./components/region.ts";
 import {
@@ -1430,6 +1431,7 @@ export function startView(options: ViewOptions): (message: LogicToView) => void 
         openContainers.at(-1)?.omrClose();
         return;
       case "pageVisibility":
+        if (message.background === true) setAppBackground(!message.visible);
         for (const live of document.querySelectorAll("wx-live-player, wx-live-pusher")) {
           (live as Partial<BuiltinElement>).omrPageVisibility?.(
             message.visible,

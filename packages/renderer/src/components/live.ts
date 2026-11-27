@@ -284,6 +284,18 @@ export class WxLivePlayer extends LiveStream {
 let nextPusherId = 0;
 
 /**
+ * Whether the Mini Program is in the background. Kept for the whole view, as
+ * only pushers on the page hear the app leave and return, and one mounted in
+ * the background must not start its camera.
+ */
+let appInBackground = false;
+
+/** The view tells pushers, mounted now or later, that the app left or returned. */
+export function setAppBackground(hidden: boolean): void {
+  appInBackground = hidden;
+}
+
+/**
  * `<live-pusher>`, as wide as its parent and with no height of its own. When
  * inserted it asks the logic layer for `scope.camera` and `scope.record`; a
  * refusal fires `error` with code 10001 or 10002. With both it previews the
@@ -299,8 +311,6 @@ export class WxLivePusher extends LiveStream {
   private previewing = false;
   private state: "idle" | "pushing" | "paused" = "idle";
   private suspended = false;
-  /** Whether the Mini Program is in the background. */
-  private background = false;
   /**
    * A preview, and with `push` a push, asked for in the background, whether by
    * authorization with autopush or by the context; it starts when the app returns.
@@ -363,7 +373,7 @@ export class WxLivePusher extends LiveStream {
   private startPreview(): void {
     if (this.previewing || !this.allowed()) return;
     // WeChat stops the camera in the background, so nothing starts until the app returns
-    if (this.background) {
+    if (appInBackground) {
       this.deferred ??= { push: false };
       return;
     }
@@ -378,7 +388,7 @@ export class WxLivePusher extends LiveStream {
     if (!this.allowed()) throw new Error(this.auth?.errMsg ?? "camera is not ready");
     if (this.state !== "idle") return;
     // Asked in the background, even after the preview stopped there, the push waits for the return
-    if (this.background) {
+    if (appInBackground) {
       this.deferred = { push: true };
       return;
     }
@@ -464,7 +474,7 @@ export class WxLivePusher extends LiveStream {
   }
   omrPageVisibility(visible: boolean, background: boolean): void {
     if (!background) return;
-    this.background = !visible;
+    appInBackground = !visible;
     // Returning clears the suspension even when the preview stopped in the background
     if (!visible && !this.suspended && this.previewing) {
       this.suspended = true;

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { defineBuiltins, type BuiltinElement } from "../src/builtins.ts";
 import { animate } from "../src/components/base.ts";
+import { setAppBackground } from "../src/components/live.ts";
 import { Wheel } from "../src/components/wheel.ts";
 
 defineBuiltins();
@@ -444,6 +445,25 @@ describe("live", () => {
       vi.advanceTimersByTime(2000);
       expect(fired).toContain(1001);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a pusher unmounted in the background and mounted again after the app returned starts at once", () => {
+    vi.useFakeTimers();
+    try {
+      const pusher = mount("wx-live-pusher", { url: "rtmp://a/push", autopush: true }) as Live;
+      pusher.omrPageVisibility(false, true);
+      pusher.remove();
+      // The view hears the return; the detached pusher does not
+      setAppBackground(false);
+      document.body.append(pusher);
+      const fired = codes(pusher);
+      pusher.omrLivePusherState({});
+      vi.advanceTimersByTime(2000);
+      expect(fired).toContain(1001);
+    } finally {
+      setAppBackground(false);
       vi.useRealTimers();
     }
   });
