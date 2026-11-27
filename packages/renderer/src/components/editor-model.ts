@@ -792,8 +792,10 @@ export function locate(root: MiniNode, index: number): DomPoint {
       : { node: line, offset: 0 };
     return result;
   };
-  for (const block of Array.from(root.childNodes)) {
+  for (const [at, block] of Array.from(root.childNodes).entries()) {
     if (block.nodeName === "HR" || attribute(block, "data-block-id") !== null) {
+      // The position of a divider or custom block is the boundary before it
+      if (remaining === 0) return { node: root, offset: at };
       remaining -= 1;
       continue;
     }

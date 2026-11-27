@@ -64,7 +64,11 @@ export class WxEditor extends Builtin {
    */
   omrResolveAsset: (src: string) => string = (src) => (isFsPath(src) ? fsFileUrl(src) : src);
 
+  /** Registered on the document while the editor is in the page. */
+  private readonly onSelectionChange = () => this.selectionChanged();
+
   connectedCallback(): void {
+    document.addEventListener("selectionchange", this.onSelectionChange);
     if (this.area) return;
     const area = document.createElement("div");
     area.className = "ql-editor";
@@ -113,11 +117,14 @@ export class WxEditor extends Builtin {
       const text = event.clipboardData?.getData("text/plain") ?? "";
       if (text) this.insertText(text);
     });
-    document.addEventListener("selectionchange", () => this.selectionChanged());
     this.addEventListener("omr-editor-portal", () => this.placePortals());
     this.update();
     this.placePortals();
     setTimeout(() => emit(this, "ready"), 0);
+  }
+
+  disconnectedCallback(): void {
+    document.removeEventListener("selectionchange", this.onSelectionChange);
   }
 
   protected override update(): void {
@@ -472,7 +479,9 @@ export class WxEditor extends Builtin {
     this.lastTyping = now;
   }
 
+  /** Records an undo step; typing after it starts a new group. */
   private remember(): void {
+    this.lastTyping = 0;
     this.undoStack.push({ html: this.area!.innerHTML, range: { ...this.range } });
     if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
     this.redoStack = [];

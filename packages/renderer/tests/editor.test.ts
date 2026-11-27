@@ -3,6 +3,7 @@ import {
   applyFormat,
   formatsAt,
   fromDelta,
+  locate,
   readHtml,
   removeFormats,
   replaceRange,
@@ -135,6 +136,14 @@ describe("editor content", () => {
     expect(read).toEqual(items);
     // a, its line end, the block and the divider come before b
     expect(positions).toEqual([5]);
+  });
+
+  test("a position before a divider is the boundary before it, not a point past every divider", () => {
+    const paragraph = el("p", [el("br")]);
+    const root = el("div", [el("hr"), el("hr"), paragraph]);
+    expect(locate(root, 0)).toEqual({ node: root, offset: 0 });
+    expect(locate(root, 1)).toEqual({ node: root, offset: 1 });
+    expect(locate(root, 2)).toEqual({ node: paragraph, offset: 0 });
   });
 
   test("reports where selection points are", () => {

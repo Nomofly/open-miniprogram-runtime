@@ -462,6 +462,40 @@ describe("editor", () => {
     expect(() => call("deleteText", {})).toThrow("parameter.index should be Number");
   });
 
+  test("a context edit ends the typing group, so the next keystroke is its own undo step", async () => {
+    const editor = mount("wx-editor", {});
+    await settle();
+    const call = (method: string, options: Record<string, unknown> = {}) =>
+      editor.omrCall!(method, [options]) as Record<string, unknown>;
+    const area = editor.querySelector<HTMLElement>(".ql-editor")!;
+    const type = (char: string) => {
+      area.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: char }));
+      area.querySelector("p")!.append(char);
+    };
+    call("setContents", { html: "<p>a</p>" });
+    call("setSelection", { index: 1, length: 0 });
+    type("x");
+    call("insertText", { text: "b" });
+    type("y");
+    // insertText puts "b" at the kept selection, after "a"; one undo takes back only "y"
+    call("undo");
+    expect(call("getContents").text).toBe("abx\n");
+  });
+
+  test("an editor stops hearing selection changes once it leaves the page, and hears them again when it returns", async () => {
+    const editor = mount("wx-editor", {});
+    await settle();
+    const added = vi.spyOn(document, "addEventListener");
+    const removed = vi.spyOn(document, "removeEventListener");
+    editor.remove();
+    expect(removed.mock.calls.filter(([name]) => name === "selectionchange")).toHaveLength(1);
+    document.body.append(editor);
+    expect(added.mock.calls.filter(([name]) => name === "selectionchange")).toHaveLength(1);
+    expect(removed.mock.calls[0]![1]).toBe(
+      added.mock.calls.find(([name]) => name === "selectionchange")![1],
+    );
+  });
+
   test("getHistoryState follows the undo and redo stacks", async () => {
     const editor = mount("wx-editor", {});
     await settle();
