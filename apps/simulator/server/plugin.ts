@@ -30,7 +30,16 @@ import {
   type SimulatorConfig,
 } from "@omr/runtime";
 import { build, type Plugin, type Rolldown, type ViteDevServer } from "vite-plus";
-import { createWebViewProxies } from "./web-view-proxy.ts";
+import { createWebViewProxies, isLoopbackAddress } from "./web-view-proxy.ts";
+
+/**
+ * Whether a request comes from this machine. The proxies fetch any URL a page
+ * names, including the developer's local and private services, so only the
+ * machine's own browser (or a port forward to it) may use them, even when the
+ * dev server listens on the network.
+ */
+const fromThisMachine = (req: IncomingMessage) =>
+  isLoopbackAddress((req.socket.remoteAddress ?? "").replace(/^::ffff:(?=\d+\.)/, ""));
 
 export interface SimulatorPluginOptions {
   /** The Mini Program project directory. */
@@ -187,6 +196,11 @@ export function omrSimulator(options: SimulatorPluginOptions): Plugin {
       send(res, 200, "text/html", WEBVIEW_HTML);
     } else if (pathname === "/__omr/webview.js") {
       send(res, 200, "text/javascript", await webview());
+    } else if (
+      (pathname === WEB_VIEW_PROXY_PATH || pathname === REQUEST_PROXY_PATH) &&
+      !fromThisMachine(req)
+    ) {
+      sendJson(res, 403, { error: "the simulator's proxies serve only this machine" });
     } else if (pathname === WEB_VIEW_PROXY_PATH) {
       // Where the shell opens a <web-view> page: the proxy for its origin, at the same path
       let target: URL | undefined;

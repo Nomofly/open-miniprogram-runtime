@@ -244,7 +244,7 @@ interface Proxy {
 }
 
 const LOOPBACK = ["127.0.0.1", "::1"];
-const isLoopbackAddress = (address: string) =>
+export const isLoopbackAddress = (address: string) =>
   address === "::1" || address === "localhost" || /^127\.\d+\.\d+\.\d+$/.test(address);
 
 /** Listens on a port of the system's choosing, which the hosts after the first share. */
