@@ -42,7 +42,8 @@ interface VoipWindow {
 export function createVoipApis(ctx: ApiContext, selfOpenId: string) {
   const { host } = ctx;
   let room: Room | undefined;
-  let joining = false;
+  /** A join waiting for the user's consent; going to the background calls it off. */
+  let joining: { interrupted: boolean } | undefined;
   const windows = new Map<string, VoipWindow>();
 
   const listeners = (name: string) => {
@@ -121,6 +122,7 @@ export function createVoipApis(ctx: ApiContext, selfOpenId: string) {
   };
   /** Going to the background ends the chat (`onVoIPChatInterrupted` code -1). */
   const interrupt = () => {
+    if (joining) joining.interrupted = true;
     if (!room) return;
     leave();
     interrupted.emit({
@@ -141,7 +143,8 @@ export function createVoipApis(ctx: ApiContext, selfOpenId: string) {
     requireParam(options, "groupId", "String");
     if (room || joining) throw new ApiError("当前已在房间内", -1);
     const roomType = options.roomType === "video" ? "video" : "voice";
-    joining = true;
+    const join = { interrupted: false };
+    joining = join;
     try {
       await ctx.requirePrivacy("joinVoIPChat");
       if (!(await ctx.requestScope("scope.record"))) throw new ApiError("auth deny");
@@ -149,8 +152,10 @@ export function createVoipApis(ctx: ApiContext, selfOpenId: string) {
         throw new ApiError("auth deny");
       }
     } finally {
-      joining = false;
+      joining = undefined;
     }
+    // The app went to the background while the user was asked: the chat never starts
+    if (join.interrupted) throw new ApiError("由于退后台，导致会话中断", -1);
     const others = (host.manifest.config.voip?.members ?? DEFAULT_MEMBERS).filter(
       (openid) => openid !== selfOpenId,
     );

@@ -1038,6 +1038,30 @@ describe("logic layer", () => {
     expect(inUse).toEqual([["record"], ["camera", "record"], ["camera"], []]);
   });
 
+  test("a joinVoIPChat waiting for consent when the app goes to the background does not join", async () => {
+    const { sent, handle, view, log } = boot(
+      {
+        "app.js": APP,
+        "pages/index/index.js": `
+          const push = (r) => getApp().log.push(r);
+          const room = { signature: "s", nonceStr: "n", timeStamp: 1, groupId: "g" };
+          Page({ join() { wx.joinVoIPChat({ ...room, success: push, fail: push }); } });`,
+      },
+      { pages: ["pages/index/index"] },
+      { auth: { privacy: { agreed: true }, user: { openid: "me" } } },
+    );
+    view(1, { type: "ready" });
+    view(1, { type: "event", ownerId: 0, handler: "join", event: tapOn("") });
+    for (let i = 0; i < 4; i++) await settle();
+    const ui = sent.findLast((message) => message.type === "ui");
+    if (ui?.type !== "ui") throw new Error("no consent dialog");
+    handle({ type: "appHide" });
+    handle({ type: "uiResult", callId: ui.callId, result: { allow: true } });
+    for (let i = 0; i < 4; i++) await settle();
+    expect(log()).toEqual([{ errMsg: "joinVoIPChat:fail 由于退后台，导致会话中断", errCode: -1 }]);
+    expect(sent.some((message) => message.type === "permissionsInUse")).toBe(false);
+  });
+
   test("a camera moved while it waits for consent shows in the capsule once", async () => {
     const { sent, handle, view } = boot(
       { "app.js": APP, "pages/index/index.js": `Page({});` },
