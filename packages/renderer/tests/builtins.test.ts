@@ -291,6 +291,17 @@ describe("wheel", () => {
     expect(w.index).toBe(1);
   });
 
+  test("a glide whose rows are all removed stops without settling at a row", () => {
+    const run = frames();
+    const { w, settled, step } = wheel();
+    w.setIndex(5);
+    step(30);
+    w.layout(34, 0, 34);
+    run();
+    expect(settled).toEqual([]);
+    expect(w.index).toBe(0);
+  });
+
   test("with immediate-change, the last change of a picker-view is where its columns stop", async () => {
     const run = frames();
     const view = document.createElement("wx-picker-view") as unknown as BuiltinElement;

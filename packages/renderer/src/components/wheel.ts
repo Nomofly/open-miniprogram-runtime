@@ -91,8 +91,16 @@ export class Wheel {
     this.content.style.paddingTop = `${this.padding}px`;
     this.content.style.paddingBottom = `${this.padding}px`;
     if (!this.picking) this.setIndex(this.index);
+    else if (changed && !this.dragging && count === 0) {
+      // With no rows left the glide ends at none of them: no row to settle at
+      this.stop();
+      this.picking = false;
+      this.requested = undefined;
+      this.setIndex(0);
+      this.events.pickEnd?.();
+    }
     // A glide toward a row that moved or no longer exists heads for the row it can stop at now
-    else if (changed && !this.dragging && count > 0) this.finish(this.clamp(this.target));
+    else if (changed && !this.dragging) this.finish(this.clamp(this.target));
   }
 
   /** Moves to an item without events, as setting `value` does; while the user moves the wheel, once it stops. */
